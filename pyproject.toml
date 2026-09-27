@@ -1,0 +1,54 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "credit-risk-intelligence"
+version = "0.1.0"
+description = "Credit default modelling on public loan data: leakage-audited features, out-of-time validation, calibration and explainability."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Oussama Zbir", email = "oussamazbirpro@gmail.com" }]
+keywords = [
+    "credit-risk",
+    "credit-scoring",
+    "probability-of-default",
+    "machine-learning",
+    "out-of-time-validation",
+    "data-validation",
+]
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "pydantic>=2.7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "pandas-stubs>=2.2",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/credit_risk"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+mypy_path = "src"
+files = ["src", "tests"]
