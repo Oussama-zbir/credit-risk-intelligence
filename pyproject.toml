@@ -21,6 +21,7 @@ keywords = [
 dependencies = [
     "numpy>=1.26",
     "pandas>=2.2",
+    "pyarrow>=16",
     "pydantic>=2.7",
 ]
 

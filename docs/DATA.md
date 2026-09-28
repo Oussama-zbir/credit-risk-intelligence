@@ -87,3 +87,33 @@ ranges such as FICO outside 300–850). **Warnings** record known source quirks
 handled later — `dti` of -1 or above 100, `revol_util` above 100%, and nulls in
 columns the source is known to leave empty — so their size is visible in every
 run instead of being cleaned away silently.
+
+## Features
+
+`build_features` turns labelled loans into a typed frame. Every step is
+**row-wise** — it reads one loan and nothing else — so running it over the
+whole file before the out-of-time split cannot leak the test window into
+training. Anything fitted (imputation, scaling, binning, encoding) belongs to a
+model pipeline, fitted on the training window only; missing values are
+therefore left missing here.
+
+| Feature | From | Rule |
+| --- | --- | --- |
+| `fico` | `fico_range_low`, `fico_range_high` | Midpoint of the 4-point bureau band |
+| `emp_length_years` | `emp_length` | `'< 1 year'` = 0 .. `'10+ years'` = 10; unknown strings raise |
+| `credit_history_months` | `earliest_cr_line`, `issue_d` | Months from first credit line to issue |
+| `term_months` | `term` | 36 or 60 |
+| `int_rate`, `revol_util` | same | `'13.56%'` strings parsed to 13.56 |
+| `home_ownership` | same | `ANY`, `NONE`, `OTHER` merged into one bucket |
+
+Two impossible values are set to missing and counted in the report: `dti`
+below zero, and a first credit line dated after the loan. A test asserts that
+every applicant and pricing column in the contract feeds some feature, so a
+column added to the contract cannot be dropped silently.
+
+## Snapshot date
+
+The maturity window needs the date the export was taken. It is read from the
+file — the latest `last_pymnt_d` — rather than hard-coded, so a newer export
+cannot be labelled against a stale date. `last_pymnt_d` is post-origination and
+is read on its own for this purpose only; it never enters the loaded frame.

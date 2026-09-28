@@ -85,7 +85,7 @@ NULLABLE: frozenset[str] = frozenset(
 )
 
 
-def _as_number(values: pd.Series) -> pd.Series:
+def as_number(values: pd.Series) -> pd.Series:
     """Numeric view of a column that may arrive as `'13.56%'`."""
     if pd.api.types.is_numeric_dtype(values):
         return values
@@ -106,7 +106,7 @@ def validate_raw(raw: pd.DataFrame) -> ValidationReport:
             severity = Severity.WARNING if name in NULLABLE else Severity.ERROR
             issues.append(Issue(name, "null", nulls, severity))
         if BY_NAME[name].kind is Kind.NUMERIC:
-            values = _as_number(raw[name])
+            values = as_number(raw[name])
             unparsed = int((values.isna() & raw[name].notna()).sum())
             if unparsed:
                 issues.append(Issue(name, "not_numeric", unparsed, Severity.ERROR))
@@ -114,7 +114,7 @@ def validate_raw(raw: pd.DataFrame) -> ValidationReport:
     for rule in RANGE_RULES:
         if rule.column not in present:
             continue
-        values = _as_number(raw[rule.column])
+        values = as_number(raw[rule.column])
         outside = pd.Series(False, index=raw.index)
         if rule.low is not None:
             outside |= values < rule.low

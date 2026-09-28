@@ -11,9 +11,10 @@ definition, out-of-time validation, and — in later milestones — a baseline
 scorecard, calibrated gradient boosting, explainability, serving and drift
 monitoring.
 
-> **Status: foundation.** The data contract, default definition and
-> out-of-time split exist and are tested. No model is trained yet; the roadmap
-> below is the plan, not a claim.
+> **Status: data pipeline.** The data contract, default definition,
+> out-of-time split and the preprocessing pipeline exist and are tested on
+> synthetic rows. No model is trained yet; the roadmap below is the plan, not a
+> claim.
 
 ## Why the data layer comes first
 
@@ -48,7 +49,26 @@ src/credit_risk/data/
   validation.py   ingestion checks: errors stop the pipeline, warnings are counted
   target.py       default definition + maturity window, with a LabelReport
   split.py        out-of-time split between issue-date windows
+  loader.py       reads contract columns only; snapshot from the file itself
+  features.py     row-wise typed features: nothing fitted, so no split leakage
+  report.py       population, vintages, warnings and missingness as Markdown
+src/credit_risk/prepare.py   raw export -> data/processed/loans.parquet + data_report.md
 ```
+
+## Preparing the data
+
+Download `accepted_2007_to_2018Q4.csv.gz` from the
+[Lending Club dataset on Kaggle](https://www.kaggle.com/datasets/wordsforthewise/lending-club)
+into `data/`, then:
+
+```bash
+python -m credit_risk.prepare data/accepted_2007_to_2018Q4.csv.gz
+```
+
+The pipeline reads only contract columns, stops on any contract error, labels
+matured loans, builds typed features and writes a Parquet frame plus a data
+report recording the file's SHA-256, the snapshot date and the rows lost at
+each stage.
 
 ## Development
 
@@ -65,7 +85,8 @@ real file goes in `data/`, which is git-ignored.
 ## Roadmap
 
 1. ~~Data contract, default definition, out-of-time split~~
-2. Reproducible preprocessing pipeline over the real file, with a data report
+2. ~~Reproducible preprocessing pipeline, with a data report~~ (committed report
+   over the real file pending)
 3. Logistic-regression scorecard baseline: AUC/Gini, KS, Brier on the
    out-of-time window
 4. Gradient boosting against that baseline, probability calibration, SHAP
