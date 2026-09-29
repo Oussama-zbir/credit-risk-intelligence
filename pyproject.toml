@@ -17,12 +17,14 @@ keywords = [
     "machine-learning",
     "out-of-time-validation",
     "data-validation",
+    "logistic-regression",
 ]
 dependencies = [
     "numpy>=1.26",
     "pandas>=2.2",
     "pyarrow>=16",
     "pydantic>=2.7",
+    "scikit-learn>=1.5",
 ]
 
 [project.optional-dependencies]
@@ -53,3 +55,8 @@ python_version = "3.12"
 strict = true
 mypy_path = "src"
 files = ["src", "tests"]
+
+# scikit-learn ships no type information.
+[[tool.mypy.overrides]]
+module = ["sklearn.*"]
+ignore_missing_imports = true

@@ -11,10 +11,10 @@ definition, out-of-time validation, and — in later milestones — a baseline
 scorecard, calibrated gradient boosting, explainability, serving and drift
 monitoring.
 
-> **Status: data pipeline.** The data contract, default definition,
-> out-of-time split and the preprocessing pipeline exist and are tested on
-> synthetic rows. No model is trained yet; the roadmap below is the plan, not a
-> claim.
+> **Status: baseline model.** The data contract, default definition,
+> out-of-time split, preprocessing pipeline and a logistic-regression baseline
+> with its evaluation exist and are tested on synthetic rows. No results over
+> the real file are published yet, so this README quotes no metrics.
 
 ## Why the data layer comes first
 
@@ -52,7 +52,11 @@ src/credit_risk/data/
   loader.py       reads contract columns only; snapshot from the file itself
   features.py     row-wise typed features: nothing fitted, so no split leakage
   report.py       population, vintages, warnings and missingness as Markdown
+src/credit_risk/models/
+  baseline.py     logistic regression; every preprocessing statistic fitted on train only
+  metrics.py      AUC, Gini, KS (ranking) and Brier, Brier skill, log loss (probabilities)
 src/credit_risk/prepare.py   raw export -> data/processed/loans.parquet + data_report.md
+src/credit_risk/train.py     out-of-time fit + evaluation -> baseline_report.md
 ```
 
 ## Preparing the data
@@ -69,6 +73,26 @@ The pipeline reads only contract columns, stops on any contract error, labels
 matured loans, builds typed features and writes a Parquet frame plus a data
 report recording the file's SHA-256, the snapshot date and the rows lost at
 each stage.
+
+## Training the baseline
+
+```bash
+python -m credit_risk.train data/processed/loans.parquet \
+    --train 2012-01:2014-12 --test 2015-07:2016-03
+```
+
+Windows are required arguments: they depend on which vintages are mature at
+the snapshot, which the data report shows. Two models are fitted on the same
+split — applicant features only, and applicant features plus Lending Club's
+grade and interest rate — and the report puts them side by side.
+
+The model is deliberately plain: `log1p` on monetary amounts, median
+imputation plus a missingness indicator, standardisation, one-hot categories
+with rare and unseen levels pooled, L2-regularised logistic regression. Ranking
+(AUC, Gini, KS) and probability quality (Brier, log loss) are reported
+separately, and Brier skill is measured against predicting the *training*
+default rate, so a shift in the base rate between windows costs the model
+skill rather than being absorbed into the reference.
 
 ## Development
 
@@ -87,8 +111,8 @@ real file goes in `data/`, which is git-ignored.
 1. ~~Data contract, default definition, out-of-time split~~
 2. ~~Reproducible preprocessing pipeline, with a data report~~ (committed report
    over the real file pending)
-3. Logistic-regression scorecard baseline: AUC/Gini, KS, Brier on the
-   out-of-time window
+3. ~~Logistic-regression baseline: AUC/Gini, KS, Brier on the out-of-time
+   window~~ (published results over the real file pending)
 4. Gradient boosting against that baseline, probability calibration, SHAP
 5. FastAPI scoring behind a versioned model artifact
 6. PSI / drift monitoring across vintages
