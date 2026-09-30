@@ -1,9 +1,9 @@
 import pandas as pd
 import pytest
 
-from conftest import MakeLoans
-from credit_risk.data.split import SplitError, TimeWindow, out_of_time_split
-from credit_risk.data.target import label_loans
+from conftest import MakeLoans, make_processed
+from credit_risk.data.split import SplitError, TimeWindow, hold_out_latest, out_of_time_split
+from credit_risk.data.target import ISSUE_DATE, TARGET, label_loans
 
 SNAPSHOT = pd.Timestamp("2018-12-01")
 
@@ -67,3 +67,31 @@ def test_single_class_window_is_refused(labelled: pd.DataFrame) -> None:
 def test_inverted_window_is_refused() -> None:
     with pytest.raises(SplitError, match="starts after"):
         window("2014-01-01", "2013-01-01")
+
+
+def test_hold_out_latest_takes_the_last_months_of_the_training_window() -> None:
+    frame = make_processed()
+    window = TimeWindow(pd.Timestamp("2012-01-01"), pd.Timestamp("2014-12-01"))
+    train = frame.loc[window.contains(frame[ISSUE_DATE])]
+    fitting, held_out = hold_out_latest(train, window, months=6)
+
+    assert len(fitting) + len(held_out) == len(train)
+    assert fitting[ISSUE_DATE].max() == pd.Timestamp("2014-06-01")
+    assert held_out[ISSUE_DATE].min() == pd.Timestamp("2014-07-01")
+
+
+@pytest.mark.parametrize("months", [0, 36, 40])
+def test_hold_out_must_leave_something_to_fit_on(months: int) -> None:
+    frame = make_processed()
+    window = TimeWindow(pd.Timestamp("2012-01-01"), pd.Timestamp("2014-12-01"))
+    with pytest.raises(SplitError, match="cannot hold out"):
+        hold_out_latest(frame.loc[window.contains(frame[ISSUE_DATE])], window, months=months)
+
+
+def test_single_class_held_out_slice_is_refused() -> None:
+    frame = make_processed()
+    window = TimeWindow(pd.Timestamp("2012-01-01"), pd.Timestamp("2014-12-01"))
+    train = frame.loc[window.contains(frame[ISSUE_DATE])].copy()
+    train.loc[train[ISSUE_DATE] >= pd.Timestamp("2014-10-01"), TARGET] = 0
+    with pytest.raises(SplitError, match="held-out slice"):
+        hold_out_latest(train, window, months=3)

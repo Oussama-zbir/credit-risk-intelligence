@@ -18,6 +18,8 @@ keywords = [
     "out-of-time-validation",
     "data-validation",
     "logistic-regression",
+    "gradient-boosting",
+    "probability-calibration",
 ]
 dependencies = [
     "numpy>=1.26",

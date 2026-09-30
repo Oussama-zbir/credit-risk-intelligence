@@ -13,6 +13,13 @@ other:
   the training rate, not the test rate, because a model deployed on the test
   window could not have known the test rate either; a drift in the base rate
   therefore shows up as lost skill instead of being quietly absorbed.
+
+Brier score mixes ranking and calibration into one number, so calibration is
+also reported on its own: loans are cut into equal-count bins by predicted PD,
+and each bin's mean PD is set against its observed default rate. The
+calibration error is the loan-weighted mean gap between the two — a model that
+says 8% for a group that defaults at 12% misprices every loan in it, however
+well it ranks them.
 """
 
 from __future__ import annotations
@@ -39,6 +46,14 @@ class Scores:
     brier: float
     brier_skill: float
     log_loss: float
+    calibration_error: float
+
+
+@dataclass(frozen=True, slots=True)
+class ReliabilityBin:
+    loans: int
+    mean_pd: float
+    default_rate: float
 
 
 def _checked(
@@ -64,6 +79,30 @@ def ks_statistic(y_true: npt.ArrayLike, pd_hat: npt.ArrayLike) -> float:
     return float(np.max(tpr - fpr))
 
 
+def reliability(
+    y_true: npt.ArrayLike, pd_hat: npt.ArrayLike, *, bins: int = 10
+) -> tuple[ReliabilityBin, ...]:
+    """Equal-count bins in increasing order of predicted PD."""
+    y, p = _checked(y_true, pd_hat)
+    if not 0 < bins <= y.size:
+        raise MetricError(f"cannot cut {y.size} loans into {bins} bins")
+    order = np.argsort(p, kind="stable")
+    return tuple(
+        ReliabilityBin(
+            loans=int(idx.size),
+            mean_pd=float(p[idx].mean()),
+            default_rate=float(y[idx].mean()),
+        )
+        for idx in np.array_split(order, bins)
+    )
+
+
+def calibration_error(table: tuple[ReliabilityBin, ...]) -> float:
+    """Loan-weighted mean |mean PD - observed default rate| over the bins."""
+    loans = sum(b.loans for b in table)
+    return sum(b.loans * abs(b.mean_pd - b.default_rate) for b in table) / loans
+
+
 def score(y_true: npt.ArrayLike, pd_hat: npt.ArrayLike, *, reference_rate: float) -> Scores:
     """Ranking and probability metrics; `reference_rate` is the training default rate."""
     if not 0 < reference_rate < 1:
@@ -82,4 +121,5 @@ def score(y_true: npt.ArrayLike, pd_hat: npt.ArrayLike, *, reference_rate: float
         brier=brier,
         brier_skill=1 - brier / reference_brier,
         log_loss=float(log_loss(y, p, labels=[0, 1])),
+        calibration_error=calibration_error(reliability(y, p, bins=min(10, y.size))),
     )

@@ -76,3 +76,28 @@ def out_of_time_split(
         if classes < 2:
             raise SplitError(f"{name} window has {len(part)} loans and {classes} class(es)")
     return result
+
+
+def hold_out_latest(
+    train: pd.DataFrame, window: TimeWindow, *, months: int
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Split a training window into an earlier fitting slice and its last `months`.
+
+    A model whose probabilities are recalibrated needs data it was not fitted on,
+    and the test window is not available for that. The held-out slice is the
+    *latest* part of the training window rather than a random sample, so the
+    calibrator is fitted on the vintages closest to deployment and the fitted
+    model is still only ever scored on loans issued after the ones it learned
+    from.
+    """
+    span = (window.end.year - window.start.year) * 12 + window.end.month - window.start.month + 1
+    if not 0 < months < span:
+        raise SplitError(f"cannot hold out {months} of the {span} months in the training window")
+    cut = window.end - pd.DateOffset(months=months - 1)
+    latest = train[ISSUE_DATE] >= cut
+    parts = train.loc[~latest], train.loc[latest]
+    for name, part in zip(("fitting", "held-out"), parts, strict=True):
+        classes = part[TARGET].nunique()
+        if classes < 2:
+            raise SplitError(f"{name} slice has {len(part)} loans and {classes} class(es)")
+    return parts

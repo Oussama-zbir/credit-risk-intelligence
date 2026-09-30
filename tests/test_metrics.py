@@ -1,7 +1,13 @@
 import numpy as np
 import pytest
 
-from credit_risk.models.metrics import MetricError, ks_statistic, score
+from credit_risk.models.metrics import (
+    MetricError,
+    calibration_error,
+    ks_statistic,
+    reliability,
+    score,
+)
 
 
 def test_perfect_ranking_scores_one_and_constant_scores_are_uninformative() -> None:
@@ -59,3 +65,31 @@ def test_inputs_that_cannot_produce_a_metric_are_refused(
 def test_reference_rate_must_be_a_probability_strictly_inside_zero_one() -> None:
     with pytest.raises(MetricError, match="reference"):
         score([0, 1], [0.2, 0.8], reference_rate=0.0)
+
+
+def test_reliability_bins_are_equal_count_and_ordered_by_predicted_pd() -> None:
+    rng = np.random.default_rng(0)
+    p = rng.uniform(0, 1, 1000)
+    y = (rng.random(1000) < p).astype(int)
+    table = reliability(y, p, bins=10)
+
+    assert [b.loans for b in table] == [100] * 10
+    assert [b.mean_pd for b in table] == sorted(b.mean_pd for b in table)
+    # Labels drawn from the predictions themselves: calibrated up to noise.
+    assert calibration_error(table) < 0.05
+
+
+def test_calibration_error_sees_a_miscalibration_that_ranking_does_not() -> None:
+    rng = np.random.default_rng(0)
+    p = rng.uniform(0, 1, 5000)
+    y = (rng.random(5000) < p).astype(int)
+    halved = score(y, p / 2, reference_rate=0.5)
+    honest = score(y, p, reference_rate=0.5)
+
+    assert halved.auc == pytest.approx(honest.auc)
+    assert halved.calibration_error > 0.2 > 0.05 > honest.calibration_error
+
+
+def test_more_bins_than_loans_is_refused() -> None:
+    with pytest.raises(MetricError, match="bins"):
+        reliability([0, 1], [0.2, 0.8], bins=3)

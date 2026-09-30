@@ -7,13 +7,14 @@
 
 Probability-of-default modelling on public Lending Club data, built the way a
 lender would need it: a leakage-audited feature contract, an honest default
-definition, out-of-time validation, and — in later milestones — a baseline
-scorecard, calibrated gradient boosting, explainability, serving and drift
-monitoring.
+definition, out-of-time validation, a logistic-regression baseline and
+calibrated gradient boosting measured against it — and, in later milestones,
+explainability, serving and drift monitoring.
 
-> **Status: baseline model.** The data contract, default definition,
-> out-of-time split, preprocessing pipeline and a logistic-regression baseline
-> with its evaluation exist and are tested on synthetic rows. No results over
+> **Status: model comparison.** The data contract, default definition,
+> out-of-time split, preprocessing pipeline, a logistic-regression baseline and
+> a calibrated gradient-boosting challenger exist and are tested on synthetic
+> rows. No results over
 > the real file are published yet, so this README quotes no metrics.
 
 ## Why the data layer comes first
@@ -54,9 +55,11 @@ src/credit_risk/data/
   report.py       population, vintages, warnings and missingness as Markdown
 src/credit_risk/models/
   baseline.py     logistic regression; every preprocessing statistic fitted on train only
-  metrics.py      AUC, Gini, KS (ranking) and Brier, Brier skill, log loss (probabilities)
+  boosting.py     monotone-constrained gradient boosting, early-stopped on a later slice
+  calibration.py  Platt / isotonic recalibration fitted on that slice, never on test
+  metrics.py      AUC, Gini, KS (ranking); Brier, log loss, reliability bins (probabilities)
 src/credit_risk/prepare.py   raw export -> data/processed/loans.parquet + data_report.md
-src/credit_risk/train.py     out-of-time fit + evaluation -> baseline_report.md
+src/credit_risk/train.py     out-of-time fit + comparison -> model_report.md
 ```
 
 ## Preparing the data
@@ -74,17 +77,20 @@ matured loans, builds typed features and writes a Parquet frame plus a data
 report recording the file's SHA-256, the snapshot date and the rows lost at
 each stage.
 
-## Training the baseline
+## Training and comparing models
 
 ```bash
 python -m credit_risk.train data/processed/loans.parquet \
-    --train 2012-01:2014-12 --test 2015-07:2016-03
+    --train 2012-01:2014-12 --test 2015-07:2016-03 \
+    --calibration-months 6 --calibration platt
 ```
 
 Windows are required arguments: they depend on which vintages are mature at
-the snapshot, which the data report shows. Two models are fitted on the same
-split — applicant features only, and applicant features plus Lending Club's
-grade and interest rate — and the report puts them side by side.
+the snapshot, which the data report shows. Every model is fitted twice on the
+same split — applicant features only, and applicant features plus Lending
+Club's grade and interest rate — and `model_report.md` puts the logistic
+baseline, the raw booster and the recalibrated booster side by side, with a
+reliability table (mean PD against observed default rate, per decile) for each.
 
 The model is deliberately plain: `log1p` on monetary amounts, median
 imputation plus a missingness indicator, standardisation, one-hot categories
@@ -93,6 +99,18 @@ with rare and unseen levels pooled, L2-regularised logistic regression. Ranking
 separately, and Brier skill is measured against predicting the *training*
 default rate, so a shift in the base rate between windows costs the model
 skill rather than being absorbed into the reference.
+
+The challenger is scikit-learn's histogram gradient boosting: missing values
+and categories handled natively, and PD constrained to move in one direction
+with FICO, DTI, revolving utilisation, recent inquiries and interest rate, so
+no decline can be explained by "a higher score raised your risk". The last
+`--calibration-months` of the training window are held out, in time order: the
+number of trees is early-stopped on them and the calibrator is fitted on them,
+so the test window is never used for either. Platt is the default because it
+is stable with few defaults and cannot reorder loans; isotonic corrects any
+shape of miscalibration but overfits a small slice. Whether recalibration
+helps at all is an empirical question the report answers per run — a booster
+trained on log loss is often close to calibrated already.
 
 ## Development
 
@@ -113,9 +131,11 @@ real file goes in `data/`, which is git-ignored.
    over the real file pending)
 3. ~~Logistic-regression baseline: AUC/Gini, KS, Brier on the out-of-time
    window~~ (published results over the real file pending)
-4. Gradient boosting against that baseline, probability calibration, SHAP
-5. FastAPI scoring behind a versioned model artifact
-6. PSI / drift monitoring across vintages
+4. ~~Gradient boosting against that baseline, probability calibration~~
+   (published results over the real file pending)
+5. SHAP explanations: global importance and per-applicant reason codes
+6. FastAPI scoring behind a versioned model artifact
+7. PSI / drift monitoring across vintages
 
 ## Limitations
 
