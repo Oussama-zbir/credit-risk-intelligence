@@ -7,7 +7,7 @@ from conftest import make_processed
 from credit_risk.data.features import feature_names
 from credit_risk.data.split import OutOfTimeSplit, TimeWindow, out_of_time_split
 from credit_risk.models.calibration import Method
-from credit_risk.train import Comparison, evaluate, main, parse_window
+from credit_risk.train import RISKIEST_LOANS, Comparison, evaluate, main, parse_window
 
 
 @pytest.fixture(scope="module")
@@ -40,6 +40,8 @@ def test_every_model_is_scored_on_the_same_out_of_time_loans(
         assert all(
             sum(b.loans for b in e.test_reliability) == len(split.test) for e in result.evaluations
         )
+        assert result.explanation.contributions.index.equals(result.explained.index)
+        assert result.explained.index.isin(split.test.index).all()
 
 
 def test_booster_ranks_close_to_a_baseline_that_matches_the_true_model(
@@ -89,3 +91,6 @@ def test_cli_writes_a_report_comparing_models_and_feature_sets(tmp_path: Path) -
     assert "## Reliability on the test window — applicant" in report
     assert report.count("\n| 10 | ") == 1
     assert "## Largest baseline coefficients — applicant" in report
+    assert "### applicant + lender pricing\n" in report
+    reasons = report.split("## Reason codes for the riskiest loans — applicant\n")[1]
+    assert reasons.count("\n| ") == 2 + RISKIEST_LOANS  # header, rule, one row per loan

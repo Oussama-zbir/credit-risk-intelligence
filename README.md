@@ -58,6 +58,7 @@ src/credit_risk/models/
   boosting.py     monotone-constrained gradient boosting, early-stopped on a later slice
   calibration.py  Platt / isotonic recalibration fitted on that slice, never on test
   metrics.py      AUC, Gini, KS (ranking); Brier, log loss, reliability bins (probabilities)
+  explain.py      exact TreeSHAP over the booster's trees; adverse-action reason codes
 src/credit_risk/prepare.py   raw export -> data/processed/loans.parquet + data_report.md
 src/credit_risk/train.py     out-of-time fit + comparison -> model_report.md
 ```
@@ -112,6 +113,19 @@ shape of miscalibration but overfits a small slice. Whether recalibration
 helps at all is an empirical question the report answers per run — a booster
 trained on log loss is often close to calibrated already.
 
+The report then explains the booster on a sample of the test window: mean
+absolute TreeSHAP contribution per feature, and reason codes for the riskiest
+loans — only features that *raised* the PD, largest first, as a decline notice
+would cite them. TreeSHAP is implemented in `explain.py` directly over the
+fitted trees rather than through the `shap` package, which would add a compiled
+numba stack for one algorithm. That means reading scikit-learn's private tree
+arrays, so every call checks that base value plus contributions reproduces the
+model's log-odds and raises if not; the tests also compare against brute-force
+Shapley values over every coalition, and check that constrained features'
+contributions move only in their constrained direction. Contributions are in
+the booster's log-odds: Platt calibration rescales them all by one positive
+factor, so the reasons and their order do not change.
+
 ## Development
 
 ```bash
@@ -133,7 +147,7 @@ real file goes in `data/`, which is git-ignored.
    window~~ (published results over the real file pending)
 4. ~~Gradient boosting against that baseline, probability calibration~~
    (published results over the real file pending)
-5. SHAP explanations: global importance and per-applicant reason codes
+5. ~~SHAP explanations: global importance and per-applicant reason codes~~
 6. FastAPI scoring behind a versioned model artifact
 7. PSI / drift monitoring across vintages
 

@@ -54,7 +54,7 @@ MONOTONE: Final[dict[str, int]] = {
 MAX_TREES: Final = 1000
 
 
-def _model_frame(frame: pd.DataFrame, features: Sequence[str]) -> pd.DataFrame:
+def model_frame(frame: pd.DataFrame, features: Sequence[str]) -> pd.DataFrame:
     # The booster finds categorical columns by dtype, so they must arrive as one.
     out = frame[list(features)].copy()
     for name in out.columns.intersection(list(CATEGORICAL_FEATURES)):
@@ -65,7 +65,7 @@ def _model_frame(frame: pd.DataFrame, features: Sequence[str]) -> pd.DataFrame:
 def _raw_pd(
     model: HistGradientBoostingClassifier, frame: pd.DataFrame, features: Sequence[str]
 ) -> npt.NDArray[np.float64]:
-    proba: npt.NDArray[np.float64] = model.predict_proba(_model_frame(frame, features))
+    proba: npt.NDArray[np.float64] = model.predict_proba(model_frame(frame, features))
     return proba[:, 1]
 
 
@@ -120,9 +120,9 @@ def fit_booster(
     """
     model = build_booster(features, seed=seed)
     model.fit(
-        _model_frame(fitting, features),
+        model_frame(fitting, features),
         fitting[TARGET],
-        X_val=_model_frame(calibration, features),
+        X_val=model_frame(calibration, features),
         y_val=calibration[TARGET],
     )
     calibrator = fit_calibrator(_raw_pd(model, calibration, features), calibration[TARGET], method)

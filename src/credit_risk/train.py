@@ -14,6 +14,10 @@ whole training window), gradient boosting as fitted, and the same booster
 recalibrated. The booster is fitted on the training window minus its latest
 `--calibration-months`, which the calibrator is fitted on instead — so the
 booster sees fewer loans than the baseline, and has to win anyway.
+
+The calibrated booster is then explained on a sample of the test window:
+mean absolute TreeSHAP contribution per feature, and the reason codes behind
+the riskiest applicant-only scores.
 """
 
 from __future__ import annotations
@@ -38,11 +42,15 @@ from credit_risk.data.target import TARGET
 from credit_risk.models.baseline import FittedBaseline, fit_baseline
 from credit_risk.models.boosting import FittedBooster, fit_booster
 from credit_risk.models.calibration import Method
+from credit_risk.models.explain import Explanation, explain, reason_codes
 from credit_risk.models.metrics import ReliabilityBin, Scores, reliability, score
 
 type FloatArray = npt.NDArray[np.float64]
 
 TOP_COEFFICIENTS = 10
+TOP_FEATURES = 10
+EXPLAINED_LOANS = 5_000
+RISKIEST_LOANS = 5
 CALIBRATION_MONTHS = 6
 FEATURE_SETS = (("applicant", False), ("applicant + lender pricing", True))
 
@@ -65,6 +73,8 @@ class Comparison:
     baseline: FittedBaseline
     booster: FittedBooster
     evaluations: tuple[Evaluation, ...]
+    explained: pd.DataFrame  # test-window sample the explanation covers
+    explanation: Explanation
 
 
 def parse_window(text: str) -> TimeWindow:
@@ -99,6 +109,7 @@ def evaluate(
             test_reliability=reliability(split.test[TARGET], test_pd),
         )
 
+    explained = split.test.sample(min(EXPLAINED_LOANS, len(split.test)), random_state=0)
     results = []
     for name, pricing in FEATURE_SETS:
         features = feature_names(include_lender_pricing=pricing)
@@ -114,6 +125,8 @@ def evaluate(
                     evaluation("gradient boosting, raw", booster.raw_pd),
                     evaluation(f"gradient boosting + {method}", booster.predict_pd),
                 ),
+                explained=explained,
+                explanation=explain(booster, explained),
             )
         )
     return results
@@ -175,6 +188,41 @@ def render(split: OutOfTimeSplit, results: list[Comparison], *, calibration_mont
             "| --- | --- |",
             *(f"| {name} | {weight:+.3f} |" for name, weight in top.items()),
         ]
+    lines += [
+        "",
+        "## What drives the booster",
+        "",
+        f"Mean absolute TreeSHAP contribution to the booster's log-odds over "
+        f"{len(applicant.explained):,} test loans. Platt calibration rescales every "
+        "contribution by one positive factor; isotonic keeps their order, not their sum.",
+    ]
+    for result in results:
+        top = result.explanation.importance().head(TOP_FEATURES)
+        lines += [
+            "",
+            f"### {result.features}",
+            "",
+            "| feature | mean abs contribution |",
+            "| --- | --- |",
+            *(f"| {name} | {value:.3f} |" for name, value in top.items()),
+        ]
+    pd_hat = pd.Series(applicant.booster.predict_pd(applicant.explained), applicant.explained.index)
+    riskiest = applicant.explained.loc[pd_hat.nlargest(RISKIEST_LOANS).index]
+    sample = Explanation(
+        applicant.explanation.base_value, applicant.explanation.contributions.loc[riskiest.index]
+    )
+    lines += [
+        "",
+        f"## Reason codes for the riskiest loans — {applicant.features}",
+        "",
+        "Features that raised each loan's PD most, with their log-odds contribution.",
+        "",
+        "| PD | reasons |",
+        "| --- | --- |",
+    ]
+    for index, reasons in zip(riskiest.index, reason_codes(sample, riskiest), strict=True):
+        cited = "; ".join(f"{r} {r.contribution:+.2f}" for r in reasons)
+        lines.append(f"| {pd_hat[index]:.2%} | {cited} |")
     return "\n".join(lines) + "\n"
 
 
