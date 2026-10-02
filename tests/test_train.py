@@ -6,7 +6,9 @@ import pytest
 from conftest import make_processed
 from credit_risk.data.features import feature_names
 from credit_risk.data.split import OutOfTimeSplit, TimeWindow, out_of_time_split
+from credit_risk.models.artifact import load_artifact
 from credit_risk.models.calibration import Method
+from credit_risk.prepare import sha256
 from credit_risk.train import RISKIEST_LOANS, Comparison, evaluate, main, parse_window
 
 
@@ -94,3 +96,24 @@ def test_cli_writes_a_report_comparing_models_and_feature_sets(tmp_path: Path) -
     assert "### applicant + lender pricing\n" in report
     reasons = report.split("## Reason codes for the riskiest loans — applicant\n")[1]
     assert reasons.count("\n| ") == 2 + RISKIEST_LOANS  # header, rule, one row per loan
+
+
+def test_cli_saves_the_applicant_booster_as_a_loadable_artifact(tmp_path: Path) -> None:
+    frame = tmp_path / "loans.parquet"
+    make_processed().to_parquet(frame, index=False)
+    artifacts = tmp_path / "artifacts"
+    main(
+        [
+            str(frame),
+            *("--train", "2012-01:2014-12", "--test", "2015-07:2016-12"),
+            *("--out", str(tmp_path / "model_report.md"), "--artifact-dir", str(artifacts)),
+        ]
+    )
+
+    (saved,) = artifacts.iterdir()
+    manifest = load_artifact(saved).manifest
+    assert manifest.features == feature_names()
+    assert manifest.provenance.data_sha256 == sha256(frame)
+    assert manifest.provenance.train_window == ("2012-01", "2014-12")
+    assert manifest.provenance.test_window == ("2015-07", "2016-12")
+    assert manifest.provenance.calibration_months == 6

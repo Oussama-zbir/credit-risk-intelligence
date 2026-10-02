@@ -65,3 +65,27 @@ def test_pricing_features_are_only_used_when_asked_for(
     model = fit_booster(*slices, APPLICANT)
     assert "grade" not in model.model.feature_names_in_
     assert set(model.model.feature_names_in_) == set(APPLICANT)
+
+
+def test_a_categorical_missing_in_every_row_is_scored_as_missing(
+    slices: tuple[pd.DataFrame, pd.DataFrame], booster: FittedBooster
+) -> None:
+    # A batch with no `purpose` at all arrives as float NaN, not as a categorical.
+    loans = slices[1].head(3).copy()
+    typed = loans.assign(purpose=pd.Categorical([np.nan] * 3, loans["purpose"].cat.categories))
+    untyped = loans.assign(purpose=np.nan)
+    np.testing.assert_array_equal(booster.predict_pd(untyped), booster.predict_pd(typed))
+
+
+def test_categorical_levels_seen_in_fitting_are_recorded(
+    slices: tuple[pd.DataFrame, pd.DataFrame], booster: FittedBooster
+) -> None:
+    assert booster.categories["grade"] == tuple(sorted(slices[0]["grade"].dropna().unique()))
+    assert set(booster.categories) == {
+        "purpose",
+        "application_type",
+        "home_ownership",
+        "verification_status",
+        "grade",
+        "sub_grade",
+    }

@@ -58,7 +58,10 @@ def model_frame(frame: pd.DataFrame, features: Sequence[str]) -> pd.DataFrame:
     # The booster finds categorical columns by dtype, so they must arrive as one.
     out = frame[list(features)].copy()
     for name in out.columns.intersection(list(CATEGORICAL_FEATURES)):
-        out[name] = out[name].astype("category")
+        if not isinstance(out[name].dtype, pd.CategoricalDtype):
+            # A column that is missing in every row arrives as float NaN, and
+            # float categories cannot be matched against the fitted string levels.
+            out[name] = out[name].astype(object).astype("category")
     return out
 
 
@@ -91,6 +94,8 @@ class FittedBooster:
     model: HistGradientBoostingClassifier
     features: tuple[str, ...]
     calibrator: Calibrator
+    # Levels each categorical feature took in the fitting window; any other is scored as missing.
+    categories: dict[str, tuple[str, ...]]
 
     @property
     def trees(self) -> int:
@@ -126,4 +131,11 @@ def fit_booster(
         y_val=calibration[TARGET],
     )
     calibrator = fit_calibrator(_raw_pd(model, calibration, features), calibration[TARGET], method)
-    return FittedBooster(model=model, features=tuple(features), calibrator=calibrator)
+    categories = {
+        name: tuple(sorted(fitting[name].dropna().astype(str).unique()))
+        for name in features
+        if name in CATEGORICAL_FEATURES
+    }
+    return FittedBooster(
+        model=model, features=tuple(features), calibrator=calibrator, categories=categories
+    )

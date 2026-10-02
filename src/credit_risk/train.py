@@ -18,6 +18,11 @@ booster sees fewer loans than the baseline, and has to win anyway.
 The calibrated booster is then explained on a sample of the test window:
 mean absolute TreeSHAP contribution per feature, and the reason codes behind
 the riskiest applicant-only scores.
+
+With `--artifact-dir`, the applicant-only calibrated booster is saved as a
+versioned artifact (`models/artifact.py`). Applicant-only because it is the
+one a lender can deploy: grade and interest rate are outputs of the lender's
+own pricing, set after the applicant is scored.
 """
 
 from __future__ import annotations
@@ -39,11 +44,13 @@ from credit_risk.data.split import (
     out_of_time_split,
 )
 from credit_risk.data.target import TARGET
+from credit_risk.models.artifact import Provenance, save_artifact
 from credit_risk.models.baseline import FittedBaseline, fit_baseline
 from credit_risk.models.boosting import FittedBooster, fit_booster
 from credit_risk.models.calibration import Method
 from credit_risk.models.explain import Explanation, explain, reason_codes
 from credit_risk.models.metrics import ReliabilityBin, Scores, reliability, score
+from credit_risk.prepare import sha256
 
 type FloatArray = npt.NDArray[np.float64]
 
@@ -134,6 +141,10 @@ def evaluate(
 
 def _window(window: TimeWindow) -> str:
     return f"{window.start:%Y-%m} to {window.end:%Y-%m}"
+
+
+def _months(window: TimeWindow) -> tuple[str, str]:
+    return f"{window.start:%Y-%m}", f"{window.end:%Y-%m}"
 
 
 def render(split: OutOfTimeSplit, results: list[Comparison], *, calibration_months: int) -> str:
@@ -239,6 +250,11 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("--calibration", type=Method, choices=list(Method), default=Method.PLATT)
     parser.add_argument("--out", type=Path, default=Path("data/processed/model_report.md"))
+    parser.add_argument(
+        "--artifact-dir",
+        type=Path,
+        help="save the applicant-only calibrated booster as a versioned artifact here",
+    )
     args = parser.parse_args(argv)
 
     split = out_of_time_split(pd.read_parquet(args.frame), train=args.train, test=args.test)
@@ -252,6 +268,21 @@ def main(argv: list[str] | None = None) -> None:
                 f"calibration error {e.test.calibration_error:.2%}"
             )
     print(f"wrote {args.out}")
+    if args.artifact_dir is not None:
+        applicant = results[0]
+        path = save_artifact(
+            applicant.booster,
+            args.artifact_dir,
+            provenance=Provenance(
+                data_sha256=sha256(args.frame),
+                train_window=_months(split.train_window),
+                calibration_months=args.calibration_months,
+                test_window=_months(split.test_window),
+            ),
+            test_scores=applicant.evaluations[2].test,
+            reference=applicant.explained,
+        )
+        print(f"wrote artifact {path}")
 
 
 if __name__ == "__main__":

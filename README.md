@@ -8,14 +8,16 @@
 Probability-of-default modelling on public Lending Club data, built the way a
 lender would need it: a leakage-audited feature contract, an honest default
 definition, out-of-time validation, a logistic-regression baseline and
-calibrated gradient boosting measured against it — and, in later milestones,
-explainability, serving and drift monitoring.
+calibrated gradient boosting measured against it, TreeSHAP reason codes and a
+versioned model artifact — and, in later milestones, serving and drift
+monitoring.
 
-> **Status: model comparison.** The data contract, default definition,
-> out-of-time split, preprocessing pipeline, a logistic-regression baseline and
-> a calibrated gradient-boosting challenger exist and are tested on synthetic
-> rows. No results over
-> the real file are published yet, so this README quotes no metrics.
+> **Status: model artifact.** The data contract, default definition,
+> out-of-time split, preprocessing pipeline, a logistic-regression baseline, a
+> calibrated gradient-boosting challenger, its explanations and a
+> self-verifying model artifact exist and are tested on synthetic rows. No
+> results over the real file are published yet, so this README quotes no
+> metrics.
 
 ## Why the data layer comes first
 
@@ -59,6 +61,7 @@ src/credit_risk/models/
   calibration.py  Platt / isotonic recalibration fitted on that slice, never on test
   metrics.py      AUC, Gini, KS (ranking); Brier, log loss, reliability bins (probabilities)
   explain.py      exact TreeSHAP over the booster's trees; adverse-action reason codes
+  artifact.py     versioned model on disk: manifest, hash and reference-PD checks on load
 src/credit_risk/prepare.py   raw export -> data/processed/loans.parquet + data_report.md
 src/credit_risk/train.py     out-of-time fit + comparison -> model_report.md
 ```
@@ -126,6 +129,31 @@ contributions move only in their constrained direction. Contributions are in
 the booster's log-odds: Platt calibration rescales them all by one positive
 factor, so the reasons and their order do not change.
 
+## Model artifact
+
+```bash
+python -m credit_risk.train data/processed/loans.parquet \
+    --train 2012-01:2014-12 --test 2015-07:2016-03 --artifact-dir artifacts
+```
+
+saves the applicant-only calibrated booster — the deployable one, since grade
+and interest rate are set by the lender after scoring — as
+`artifacts/<model_id>/`: the pickled model, a `manifest.json` and a
+`reference.parquet` of 200 test loans with the PDs the model gave them. The
+manifest records the processed file's SHA-256, the train, calibration and test
+windows, the out-of-time test scores, every categorical level seen in training
+and the library versions; the model id is the model file's hash prefix, and an
+existing id is never overwritten.
+
+`load_artifact` refuses to serve rather than serve wrong: the model file must
+match the manifest's hash, scikit-learn must be the version it was saved with
+(its pickles are not portable across releases), and the reference loans must
+reproduce their saved PDs to 1e-9 — the check that catches a numpy, pandas or
+encoding change that would move scores without raising. Categorical levels
+unseen in training are scored as missing and reported by `unseen_categories`,
+for a service to log as drift. The hash detects corruption, not tampering:
+unpickling runs code, so artifacts must come from a store only training writes.
+
 ## Development
 
 ```bash
@@ -148,8 +176,9 @@ real file goes in `data/`, which is git-ignored.
 4. ~~Gradient boosting against that baseline, probability calibration~~
    (published results over the real file pending)
 5. ~~SHAP explanations: global importance and per-applicant reason codes~~
-6. FastAPI scoring behind a versioned model artifact
-7. PSI / drift monitoring across vintages
+6. ~~Versioned, self-verifying model artifact~~
+7. FastAPI scoring service over that artifact: PD + reason codes per applicant
+8. PSI / drift monitoring across vintages
 
 ## Limitations
 
