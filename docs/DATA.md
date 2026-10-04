@@ -30,17 +30,40 @@ Known weaknesses, accepted: it is a single lender's *accepted* population
 (no rejects, so no reject inference), income is mostly self-reported, and the
 lender's own grade is in the file (see Lender pricing below).
 
+## Modelling cohort
+
+The export carries 2,749 loans from 2007–2010 whose status reads
+`Does not meet the credit policy. Status:Fully Paid` (1,988) or
+`...Status:Charged Off` (761): loans issued under criteria Lending Club later
+stopped applying. They are not the population an application-time model scores,
+and they are the only real rows missing bureau fields the contract requires
+(`earliest_cr_line`, `delinq_2yrs`, `open_acc`, `total_acc`, `pub_rec`; four
+also lack `annual_inc`).
+
+`select_cohort` (`src/credit_risk/data/cohort.py`) removes them by exact
+status, **before validation**, and returns a `CohortReport` (input rows,
+excluded, eligible) that the data report prints. The pipeline is
+`load -> cohort selection -> validate -> label -> features`.
+
+Rejected alternatives: marking those fields `NULLABLE` would let the same gap
+through silently for every other loan; a `dropna()` would remove rows without
+recording which or why. Instead the full contract still applies to the
+eligible population — a required null there stops the run.
+
 ## Default definition
 
 | `loan_status` | Label |
 | --- | --- |
-| `Charged Off`, `Default`, `Does not meet the credit policy. Status:Charged Off` | default (1) |
-| `Fully Paid`, `Does not meet the credit policy. Status:Fully Paid` | good (0) |
+| `Charged Off`, `Default` | default (1) |
+| `Fully Paid` | good (0) |
 | `Current`, `In Grace Period`, `Late (16-30 days)`, `Late (31-120 days)` | unresolved — not labelled |
 | anything else, or missing | **error** (`UnknownStatusError`) |
 
 An unknown status is refused rather than mapped: a new vendor value silently
 counted as good or bad would move the label without anyone deciding it should.
+The credit-policy statuses are deliberately in none of these sets: if cohort
+selection were skipped, labelling would refuse them rather than let them back
+into the good/bad population.
 
 ## Observation window (maturity)
 

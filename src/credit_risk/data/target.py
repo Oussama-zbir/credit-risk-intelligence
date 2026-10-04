@@ -25,19 +25,13 @@ from typing import Final
 
 import pandas as pd
 
-DEFAULT_STATUSES: Final = frozenset(
-    {
-        "Charged Off",
-        "Default",
-        "Does not meet the credit policy. Status:Charged Off",
-    }
-)
-GOOD_STATUSES: Final = frozenset(
-    {
-        "Fully Paid",
-        "Does not meet the credit policy. Status:Fully Paid",
-    }
-)
+from credit_risk.data.cohort import CREDIT_POLICY_STATUSES
+
+# Loans outside the credit policy are removed by `select_cohort` and are
+# deliberately absent from every set below, so one that reaches labelling is
+# refused as unknown instead of being counted as good or bad.
+DEFAULT_STATUSES: Final = frozenset({"Charged Off", "Default"})
+GOOD_STATUSES: Final = frozenset({"Fully Paid"})
 UNRESOLVED_STATUSES: Final = frozenset(
     {
         "Current",
@@ -120,7 +114,14 @@ def label_loans(raw: pd.DataFrame, *, snapshot: pd.Timestamp) -> tuple[pd.DataFr
     unknown = set(raw["loan_status"].dropna().unique()) - KNOWN_STATUSES
     if unknown or raw["loan_status"].isna().any():
         found = sorted(unknown) + (["<missing>"] if raw["loan_status"].isna().any() else [])
-        raise UnknownStatusError(f"loan_status values outside the default definition: {found}")
+        hint = (
+            "; credit-policy loans must be removed by select_cohort first"
+            if unknown & CREDIT_POLICY_STATUSES
+            else ""
+        )
+        raise UnknownStatusError(
+            f"loan_status values outside the default definition: {found}{hint}"
+        )
 
     frame = raw.copy()
     frame[ISSUE_DATE] = parse_issue_date(frame["issue_d"])

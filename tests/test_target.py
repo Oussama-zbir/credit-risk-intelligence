@@ -19,13 +19,12 @@ def test_charged_off_and_default_are_bad_fully_paid_is_good(make_loans: MakeLoan
         {"loan_status": "Fully Paid"},
         {"loan_status": "Charged Off"},
         {"loan_status": "Default"},
-        {"loan_status": "Does not meet the credit policy. Status:Charged Off"},
-        {"loan_status": "Does not meet the credit policy. Status:Fully Paid"},
+        {"loan_status": "Fully Paid"},
     )
     labelled, report = label_loans(raw, snapshot=SNAPSHOT)
-    assert labelled[TARGET].tolist() == [0, 1, 1, 1, 0]
-    assert report.defaults == 3
-    assert report.default_rate == pytest.approx(0.6)
+    assert labelled[TARGET].tolist() == [0, 1, 1, 0]
+    assert report.defaults == 2
+    assert report.default_rate == pytest.approx(0.5)
 
 
 def test_loans_whose_term_has_not_elapsed_are_not_labelled(make_loans: MakeLoans) -> None:

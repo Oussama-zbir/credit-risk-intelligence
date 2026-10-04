@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from credit_risk.data.cohort import select_cohort
 from credit_risk.data.features import build_features
 from credit_risk.data.loader import infer_snapshot, read_raw
 from credit_risk.data.report import DataReport, render
@@ -39,17 +40,23 @@ def sha256(path: Path) -> str:
 
 
 def prepare(raw_path: Path, *, snapshot: pd.Timestamp | None = None) -> Prepared:
-    """Run load -> validate -> label -> features; raises on any contract error."""
+    """Run load -> cohort -> validate -> label -> features; raises on any contract error.
+
+    Cohort selection precedes validation so the contract is enforced in full on
+    exactly the loans that are modelled, and on nothing else.
+    """
     snapshot = infer_snapshot(raw_path) if snapshot is None else snapshot
     raw, load = read_raw(raw_path)
-    validation = require_valid(raw)
-    labelled, labels = label_loans(raw, snapshot=snapshot)
+    eligible, cohort = select_cohort(raw)
+    validation = require_valid(eligible)
+    labelled, labels = label_loans(eligible, snapshot=snapshot)
     frame, features = build_features(labelled)
     report = DataReport(
         source=raw_path.name,
         sha256=sha256(raw_path),
         snapshot=snapshot,
         load=load,
+        cohort=cohort,
         validation=validation,
         labels=labels,
         features=features,

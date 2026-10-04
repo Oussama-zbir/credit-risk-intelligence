@@ -49,6 +49,7 @@ observation window, leakage audit — is in [`docs/DATA.md`](docs/DATA.md).
 ```
 src/credit_risk/data/
   contract.py     every column, its role, and why
+  cohort.py       modelling population: drops pre-2011 loans outside the credit policy, counted
   validation.py   ingestion checks: errors stop the pipeline, warnings are counted
   target.py       default definition + maturity window, with a LabelReport
   split.py        out-of-time split between issue-date windows
@@ -76,10 +77,11 @@ into `data/`, then:
 python -m credit_risk.prepare data/accepted_2007_to_2018Q4.csv.gz
 ```
 
-The pipeline reads only contract columns, stops on any contract error, labels
-matured loans, builds typed features and writes a Parquet frame plus a data
-report recording the file's SHA-256, the snapshot date and the rows lost at
-each stage.
+The pipeline reads only contract columns, removes the 2007–2010 loans issued
+outside Lending Club's credit policy (counted in the report), stops on any
+contract error in what remains, labels matured loans, builds typed features
+and writes a Parquet frame plus a data report recording the file's SHA-256,
+the snapshot date and the rows lost at each stage.
 
 ## Training and comparing models
 

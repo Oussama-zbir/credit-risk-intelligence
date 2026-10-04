@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
+from credit_risk.data.cohort import CohortReport
 from credit_risk.data.features import FeatureReport, feature_names
 from credit_risk.data.loader import LoadReport
 from credit_risk.data.target import ISSUE_DATE, TARGET, TERM_MONTHS, LabelReport
@@ -24,6 +25,7 @@ class DataReport:
     sha256: str
     snapshot: pd.Timestamp
     load: LoadReport
+    cohort: CohortReport
     validation: ValidationReport
     labels: LabelReport
     features: FeatureReport
@@ -71,6 +73,12 @@ def render(report: DataReport, frame: pd.DataFrame) -> str:
             [
                 ("read", f"{load.rows_read:,}"),
                 ("summary lines dropped", f"{load.summary_rows_dropped:,}"),
+                ("cohort input", f"{report.cohort.input_rows:,}"),
+                (
+                    "excluded: outside the historical credit policy",
+                    f"{report.cohort.outside_credit_policy:,}",
+                ),
+                ("modelling cohort (validated)", f"{report.cohort.eligible:,}"),
                 ("immature at snapshot", f"{labels.immature:,}"),
                 ("matured but unresolved", f"{labels.unresolved:,}"),
                 ("labelled", f"{labels.labelled:,}"),
