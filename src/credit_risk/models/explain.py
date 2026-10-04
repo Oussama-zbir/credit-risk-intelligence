@@ -1,10 +1,32 @@
-"""Why the booster scored a loan the way it did: TreeSHAP and reason codes.
+"""Why a model scored a loan the way it did: exact contributions and reason codes.
 
-Contributions are exact path-dependent TreeSHAP values (Lundberg et al., 2020)
-in the booster's log-odds: for every loan, the base value plus its feature
-contributions equals the model's raw log-odds, and `explain` checks that
-identity against `decision_function` before returning anything. Log-odds
-rather than PD because that is the scale on which contributions add up.
+For either model, `explain` returns one contribution per business feature in
+the model's log-odds: for every loan, the base value plus its contributions
+equals the model's own log-odds, and `explain` checks that identity against
+`decision_function` before returning anything. Log-odds rather than PD because
+that is the scale on which contributions add up. Reason codes are built from
+the contributions the same way for both models.
+
+**Logistic regression** is explained with exact training-centred additive
+log-odds contributions; its log-odds are already a sum, so no attribution
+method is needed. Each transformed input j contributes
+`beta_j * (x_j - training_mean_j)`, and those are summed back to the business
+feature they came from — a
+numeric value and its missing-value indicator, a monetary amount after `log1p`
+and scaling, every one-hot column of a categorical. The base value is
+`intercept + beta . training_mean`, the log-odds of the average transformed
+training input, so base plus contributions reconstructs `decision_function`
+exactly. The means follow the pipeline's real transformed output, so an
+unseen level that lands in the infrequent column is measured from that
+column's training share, not assumed to be all zeros. Centring matters for
+categoricals. Measured from
+an all-zero encoding — no level at all, which no applicant has — a level would
+be cited whenever its coefficient is positive, however common it is; measured
+from the training means (the level frequencies), it is cited only when it
+pushes this applicant above the training population.
+
+**Gradient boosting** is explained with exact path-dependent TreeSHAP
+(Lundberg et al., 2020), relative to the mean training log-odds.
 
 Calibration does not change the story. Platt is affine in log-odds with a
 positive slope (the calibrator refuses a negative one), so it rescales every
@@ -30,6 +52,7 @@ distinct satisfy/not-satisfy pattern of a leaf at once, never per loan.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from math import factorial
 from typing import Final
@@ -38,6 +61,7 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
+from credit_risk.models.baseline import FittedBaseline
 from credit_risk.models.boosting import FittedBooster, model_frame
 
 type FloatArray = npt.NDArray[np.float64]
@@ -198,8 +222,44 @@ def _add_leaf(value: float, path: dict[int, tuple[float, BoolArray]], phi: Float
         phi[:, feature] += share[inverse.reshape(-1)]
 
 
-def explain(booster: FittedBooster, frame: pd.DataFrame) -> Explanation:
-    """Exact TreeSHAP contributions of every feature to every loan in `frame`."""
+def _sources(outputs: Sequence[str], baseline: FittedBaseline) -> list[str]:
+    """The business feature behind each transformed input of the baseline."""
+    categorical = set(baseline.categories)
+    sources = []
+    for output in outputs:
+        owners = [
+            feature
+            for feature in baseline.features
+            if output in (feature, f"missingindicator_{feature}")
+            or (feature in categorical and output.startswith(f"{feature}_"))
+        ]
+        if not owners:
+            raise ExplanationError(f"transformed input {output!r} has no source feature")
+        sources.append(max(owners, key=len))  # `grade_A` is grade's, not a shorter name's
+    return sources
+
+
+def _linear(baseline: FittedBaseline, frame: pd.DataFrame) -> tuple[Explanation, FloatArray]:
+    columns = baseline.pipeline.named_steps["columns"]
+    regression = baseline.pipeline.named_steps["model"]
+    names = tuple(columns.get_feature_names_out())
+    if names != baseline.input_names:
+        raise ExplanationError("training input means do not match the pipeline's inputs")
+    raw = frame[list(baseline.features)]
+    coef = regression.coef_[0]
+    means = np.asarray(baseline.input_means, dtype=np.float64)
+    terms = (np.asarray(columns.transform(raw), dtype=np.float64) - means) * coef
+    sources = _sources(names, baseline)
+    owner = np.zeros((len(sources), len(baseline.features)))
+    owner[np.arange(len(sources)), [baseline.features.index(f) for f in sources]] = 1.0
+    explanation = Explanation(
+        base_value=float(regression.intercept_[0] + coef @ means),
+        contributions=pd.DataFrame(terms @ owner, index=frame.index, columns=baseline.features),
+    )
+    return explanation, np.asarray(baseline.pipeline.decision_function(raw), dtype=np.float64)
+
+
+def _tree_shap(booster: FittedBooster, frame: pd.DataFrame) -> tuple[Explanation, FloatArray]:
     model = booster.model
     x, inputs = _encoded(booster, frame)
     phi = np.zeros_like(x)
@@ -214,6 +274,20 @@ def explain(booster: FittedBooster, frame: pd.DataFrame) -> Explanation:
         contributions=pd.DataFrame(contributions, index=frame.index, columns=booster.features),
     )
     expected = model.decision_function(model_frame(frame, booster.features))
+    return explanation, np.asarray(expected, dtype=np.float64)
+
+
+def explain(model: FittedBaseline | FittedBooster, frame: pd.DataFrame) -> Explanation:
+    """Exact contributions of every fitted feature to every loan in `frame`.
+
+    Training-centred additive contributions for the logistic regression,
+    TreeSHAP for the booster; either way the result is checked against the
+    model's log-odds.
+    """
+    if isinstance(model, FittedBaseline):
+        explanation, expected = _linear(model, frame)
+    else:
+        explanation, expected = _tree_shap(model, frame)
     gap = np.abs(explanation.log_odds.to_numpy() - expected)
     if gap.size and gap.max() > ADDITIVITY_TOLERANCE:
         raise ExplanationError(f"contributions miss the model's log-odds by up to {gap.max():.2e}")
@@ -226,8 +300,12 @@ def reason_codes(
     """Per loan, the features that raised its PD most, largest first.
 
     Only positive contributions qualify: a reason for a decline or a higher
-    price must be something that made the applicant look riskier than the
-    average training loan, never merely "less good than it could be".
+    price must be something that pushed the applicant's risk up, never merely
+    "less good than it could be". Values are shown as the applicant gave them
+    (`frame`), not as the model encoded them. These are model reason codes —
+    the adverse contributors in this model — not a compliant adverse-action
+    notice, which needs legal review of wording and of which reasons may be
+    cited.
     """
     reasons = []
     for index, row in explanation.contributions.iterrows():

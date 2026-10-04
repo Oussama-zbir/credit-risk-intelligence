@@ -25,6 +25,7 @@ from credit_risk.models.artifact import (
 from credit_risk.models.baseline import FittedBaseline, fit_baseline
 from credit_risk.models.boosting import FittedBooster, fit_booster
 from credit_risk.models.calibration import Method
+from credit_risk.models.explain import Reason, explain, reason_codes
 from credit_risk.models.metrics import Scores, score
 
 BOOSTER_PROVENANCE = Provenance(
@@ -117,11 +118,26 @@ def test_loaded_artifact_scores_exactly_like_the_saved_model(
     np.testing.assert_array_equal(model.predict_pd(test_window), fitted.predict_pd(test_window))
 
 
+def test_loaded_artifact_explains_exactly_like_the_saved_model(
+    saved: Path, fitted: FittedModel, test_window: pd.DataFrame
+) -> None:
+    loans = test_window.head(100)
+    loaded = load_artifact(saved).explain(loans)
+    original = explain(fitted, loans)
+    assert loaded.base_value == original.base_value
+    pd.testing.assert_frame_equal(loaded.contributions, original.contributions)
+
+    def rendered(codes: list[tuple[Reason, ...]]) -> list[list[tuple[str, float]]]:
+        return [[(str(r), r.contribution) for r in reasons] for reasons in codes]
+
+    assert rendered(reason_codes(loaded, loans)) == rendered(reason_codes(original, loans))
+
+
 def test_manifest_pins_the_model_to_its_data_windows_and_libraries(
     saved: Path, family: ModelFamily, fitted: FittedModel, test_window: pd.DataFrame
 ) -> None:
     manifest = load_artifact(saved).manifest
-    assert manifest.format_version == 2
+    assert manifest.format_version == 3
     assert manifest.family is family
     assert saved.name == manifest.model_id == manifest.model_sha256[:12]
     assert manifest.provenance == PROVENANCE[family]
@@ -170,9 +186,10 @@ def test_a_different_scikit_learn_version_is_refused(saved: Path) -> None:
         load_artifact(saved)
 
 
-@pytest.mark.parametrize("version", [1, 3, None])
+@pytest.mark.parametrize("version", [1, 2, 4, None])
 def test_other_manifest_format_versions_are_refused(saved: Path, version: object) -> None:
-    # Version 1 was booster-only, with no model family; it is not read as version 2.
+    # Version 1 was booster-only, with no model family; version 2 logistic
+    # regressions lack the training input means explanations need.
     _edit_manifest(saved, format_version=version)
     with pytest.raises(ArtifactError, match=rf"format {version!r} is not supported"):
         load_artifact(saved)
@@ -301,8 +318,6 @@ def test_logistic_regression_manifest_records_only_its_own_parameters(
     written = json.loads((saved / MANIFEST).read_text())["model"]
     assert set(written) == {"family", "regularization_c", "intercept", "inputs",
                             "train_default_rate"}  # fmt: skip
-    with pytest.raises(TypeError, match="no TreeSHAP"):
-        loaded.explain(pd.read_parquet(saved / REFERENCE).head(1))
 
 
 @pytest.mark.parametrize("family", [ModelFamily.GRADIENT_BOOSTING])

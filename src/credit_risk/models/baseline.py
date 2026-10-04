@@ -106,6 +106,19 @@ class FittedBaseline:
     train_default_rate: float
     # Requested features left out because they were degenerate in training, and why.
     dropped: dict[str, str]
+    # Mean of every transformed model input over the training rows, in coefficient
+    # order: the reference an explanation measures contributions from.
+    input_names: tuple[str, ...]
+    input_means: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        names = tuple(self.pipeline.named_steps["columns"].get_feature_names_out())
+        width = self.pipeline.named_steps["model"].coef_.shape[1]
+        if self.input_names != names or len(self.input_means) != width:
+            raise ValueError(
+                f"{len(self.input_means)} input means for {self.input_names[:3]}..., "
+                f"but the pipeline has {width} inputs {names[:3]}..."
+            )
 
     def predict_pd(self, frame: pd.DataFrame) -> npt.NDArray[np.float64]:
         proba: npt.NDArray[np.float64] = self.pipeline.predict_proba(frame[list(self.features)])
@@ -141,9 +154,13 @@ def fit_baseline(train: pd.DataFrame, features: Sequence[str], *, c: float = 1.0
     active, dropped = active_features(train, features)
     pipeline = build_baseline(active, c=c)
     pipeline.fit(train[list(active)], train[TARGET])
+    columns = pipeline.named_steps["columns"]
+    inputs = np.asarray(columns.transform(train[list(active)]), dtype=np.float64)
     return FittedBaseline(
         pipeline=pipeline,
         features=active,
         train_default_rate=float(train[TARGET].mean()),
         dropped=dropped,
+        input_names=tuple(columns.get_feature_names_out()),
+        input_means=tuple(float(mean) for mean in inputs.mean(axis=0)),
     )

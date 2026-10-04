@@ -67,7 +67,9 @@ from credit_risk.models.explain import Explanation, explain
 from credit_risk.models.metrics import Scores
 
 # 1: booster only. 2: model family recorded, logistic regression supported.
-FORMAT_VERSION: Final = 2
+# 3: the logistic regression carries its training input means for explanations;
+#    a v2 pickle scores but cannot be explained, so it is refused, not migrated.
+FORMAT_VERSION: Final = 3
 MANIFEST: Final = "manifest.json"
 MODEL: Final = "model.pkl"
 REFERENCE: Final = "reference.parquet"
@@ -126,7 +128,7 @@ type ModelDetails = Annotated[
 
 
 class Manifest(_Record):
-    format_version: Literal[2]
+    format_version: Literal[3]
     model_id: str
     model_sha256: str
     created_at: datetime
@@ -205,9 +207,8 @@ class ScoringModel:
         return self.model.predict_pd(frame)
 
     def explain(self, frame: pd.DataFrame) -> Explanation:
-        """TreeSHAP contributions; only gradient-boosting artifacts have them."""
-        if not isinstance(self.model, FittedBooster):
-            raise TypeError(f"{self.manifest.family} artifacts carry no TreeSHAP explanation")
+        """Exact per-feature contributions to the log-odds (see `models/explain.py`)."""
+        self.unseen_categories(frame)  # fails fast on missing columns
         return explain(self.model, frame)
 
 

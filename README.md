@@ -8,7 +8,7 @@
 Probability-of-default modelling on public Lending Club data, built the way a
 lender would need it: a leakage-audited feature contract, an honest default
 definition, out-of-time validation, a logistic-regression baseline and
-calibrated gradient boosting measured against it, TreeSHAP reason codes and a
+calibrated gradient boosting measured against it, exact model reason codes and a
 versioned model artifact — and, in later milestones, serving and drift
 monitoring.
 
@@ -62,7 +62,7 @@ src/credit_risk/models/
   calibration.py  Platt / isotonic recalibration fitted on that slice, never on test
   degenerate.py   features with no variation in a model's fitting rows, left out of that model
   metrics.py      AUC, Gini, KS (ranking); Brier, log loss, reliability bins (probabilities)
-  explain.py      exact TreeSHAP over the booster's trees; adverse-action reason codes
+  explain.py      exact log-odds contributions (training-centred for LR, TreeSHAP for GBM)
   artifact.py     versioned model (either family) on disk: manifest, hash, reference-PD checks
 src/credit_risk/prepare.py   raw export -> data/processed/loans.parquet + data_report.md
 src/credit_risk/train.py     out-of-time fit + comparison -> model_report.md
@@ -139,6 +139,22 @@ contributions move only in their constrained direction. Contributions are in
 the booster's log-odds: Platt calibration rescales them all by one positive
 factor, so the reasons and their order do not change.
 
+The logistic-regression champion is explained with exact training-centred
+additive log-odds contributions — no attribution method is needed, because its
+log-odds are already a sum. Each transformed input contributes
+`beta_j * (x_j - training_mean_j)`, the base value is
+`intercept + beta . training_mean`, and `explain` credits each term back to its
+business feature — a numeric value with its
+missing-value indicator, a monetary amount after `log1p` and scaling, every
+one-hot column of a categorical — and checks the same identity against
+`decision_function`. Features dropped at fit time have no terms, so they never
+appear. Every term is measured from its mean over the training rows, stored
+with the model at fit time, so a contribution is relative to the training
+population: a categorical level is cited only if it puts this applicant above
+that population, not merely because its coefficient is positive. Reason codes
+are the positive contributions, largest first, shown with the applicant's own
+values: model reason codes for review, not a compliant adverse-action notice.
+
 ## Model artifact
 
 ```bash
@@ -163,7 +179,7 @@ development window, and frozen before the confirmation window is scored;
 letting the CLI keep whichever model won on the run's own test window would
 turn that window into a selection set and its scores into optimistic ones.
 
-The manifest (format 2) names the model family and records what both families
+The manifest (format 3) names the model family and records what both families
 share: the processed file's SHA-256, the train, calibration (booster only) and
 test windows, the out-of-time test scores, the fitted features and any
 requested ones left out with why, every categorical level seen in training,
@@ -174,7 +190,8 @@ carries placeholder values for the other. The model id is the model file's
 hash prefix, and an existing id is never overwritten.
 
 `load_artifact` refuses to serve rather than serve wrong: the manifest must be
-format 2 and the pickle the family and features it describes, the model file
+format 3 (formats 1 and 2 are refused, not migrated) and the pickle the
+family and features it describes, the model file
 must match the manifest's hash, scikit-learn must be the version it was saved
 with (its pickles are not portable across releases), and the reference loans
 must reproduce their saved PDs to 1e-9 — the check that catches a numpy,
@@ -206,8 +223,9 @@ real file goes in `data/`, which is git-ignored.
    window~~ (published results over the real file pending)
 4. ~~Gradient boosting against that baseline, probability calibration~~
    (published results over the real file pending)
-5. ~~SHAP explanations: global importance and per-applicant reason codes~~
-6. ~~Versioned, self-verifying model artifact~~ (format 2: logistic regression or booster)
+5. ~~Explanations and per-applicant reason codes: TreeSHAP for the booster,
+   training-centred additive log-odds contributions for the logistic regression~~
+6. ~~Versioned, self-verifying model artifact~~ (format 3: logistic regression or booster)
 7. FastAPI scoring service over that artifact: PD + reason codes per applicant
 8. PSI / drift monitoring across vintages
 
