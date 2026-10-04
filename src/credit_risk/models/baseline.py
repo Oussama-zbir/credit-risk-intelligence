@@ -111,6 +111,19 @@ class FittedBaseline:
         proba: npt.NDArray[np.float64] = self.pipeline.predict_proba(frame[list(self.features)])
         return proba[:, 1]
 
+    @property
+    def categories(self) -> dict[str, tuple[str, ...]]:
+        """Levels each categorical feature took in training (rare ones included)."""
+        columns = self.pipeline.named_steps["columns"]
+        names = next(cols for name, _, cols in columns.transformers_ if name == "categorical")
+        if not names:
+            return {}
+        encoder = columns.named_transformers_["categorical"][-1]
+        return {
+            name: tuple(str(level) for level in levels if level != MISSING_CATEGORY)
+            for name, levels in zip(names, encoder.categories_, strict=True)
+        }
+
     def coefficients(self) -> pd.Series:
         """Coefficient per transformed input, largest absolute effect first.
 

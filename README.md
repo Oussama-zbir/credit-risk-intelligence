@@ -63,7 +63,7 @@ src/credit_risk/models/
   degenerate.py   features with no variation in a model's fitting rows, left out of that model
   metrics.py      AUC, Gini, KS (ranking); Brier, log loss, reliability bins (probabilities)
   explain.py      exact TreeSHAP over the booster's trees; adverse-action reason codes
-  artifact.py     versioned model on disk: manifest, hash and reference-PD checks on load
+  artifact.py     versioned model (either family) on disk: manifest, hash, reference-PD checks
 src/credit_risk/prepare.py   raw export -> data/processed/loans.parquet + data_report.md
 src/credit_risk/train.py     out-of-time fit + comparison -> model_report.md
 ```
@@ -143,26 +143,47 @@ factor, so the reasons and their order do not change.
 
 ```bash
 python -m credit_risk.train data/processed/loans.parquet \
-    --train 2012-01:2014-12 --test 2015-07:2016-03 --artifact-dir artifacts
+    --train 2012-01:2014-12 --test 2015-07:2016-03 \
+    --artifact-dir artifacts --artifact-model logistic-regression
+# or, for the calibrated booster:
+#   --artifact-dir artifacts --artifact-model gradient-boosting
 ```
 
-saves the applicant-only calibrated booster — the deployable one, since grade
-and interest rate are set by the lender after scoring — as
-`artifacts/<model_id>/`: the pickled model, a `manifest.json` and a
-`reference.parquet` of 200 test loans with the PDs the model gave them. The
-manifest records the processed file's SHA-256, the train, calibration and test
-windows, the out-of-time test scores, every categorical level seen in training
-and the library versions; the model id is the model file's hash prefix, and an
-existing id is never overwritten.
+saves one applicant-only model — the deployable kind, since grade and interest
+rate are set by the lender after scoring — as `artifacts/<model_id>/`: the
+pickled model, a `manifest.json` and a `reference.parquet` of 200 test loans
+(fitted features only) with the PDs the model gave them.
+`logistic-regression` saves the baseline fitted on the whole training window;
+`gradient-boosting` saves the booster with its calibrator.
 
-`load_artifact` refuses to serve rather than serve wrong: the model file must
-match the manifest's hash, scikit-learn must be the version it was saved with
-(its pickles are not portable across releases), and the reference loans must
-reproduce their saved PDs to 1e-9 — the check that catches a numpy, pandas or
-encoding change that would move scores without raising. Categorical levels
-unseen in training are scored as missing and reported by `unseen_categories`,
-for a service to log as drift. The hash detects corruption, not tampering:
-unpickling runs code, so artifacts must come from a store only training writes.
+**Which model is saved is always an explicit choice; it is never picked
+automatically by test AUC.** `--artifact-dir` without `--artifact-model` (or the
+reverse) is refused before training starts. A champion is chosen once, on a
+development window, and frozen before the confirmation window is scored;
+letting the CLI keep whichever model won on the run's own test window would
+turn that window into a selection set and its scores into optimistic ones.
+
+The manifest (format 2) names the model family and records what both families
+share: the processed file's SHA-256, the train, calibration (booster only) and
+test windows, the out-of-time test scores, the fitted features and any
+requested ones left out with why, every categorical level seen in training,
+and the library versions. Family-specific fields live in a `model` block —
+regularisation, intercept and input count for the logistic regression; trees,
+calibration method and TreeSHAP base value for the booster — so neither
+carries placeholder values for the other. The model id is the model file's
+hash prefix, and an existing id is never overwritten.
+
+`load_artifact` refuses to serve rather than serve wrong: the manifest must be
+format 2 and the pickle the family and features it describes, the model file
+must match the manifest's hash, scikit-learn must be the version it was saved
+with (its pickles are not portable across releases), and the reference loans
+must reproduce their saved PDs to 1e-9 — the check that catches a numpy,
+pandas or encoding change that would move scores without raising. Categorical
+levels unseen in training are scored (as missing by the booster; pooled with
+infrequent levels, or as no level, by the logistic regression) and reported by
+`unseen_categories`, for a service to log as drift. The hash detects
+corruption, not tampering: unpickling runs code, so artifacts must come from a
+store only training writes.
 
 ## Development
 
@@ -186,7 +207,7 @@ real file goes in `data/`, which is git-ignored.
 4. ~~Gradient boosting against that baseline, probability calibration~~
    (published results over the real file pending)
 5. ~~SHAP explanations: global importance and per-applicant reason codes~~
-6. ~~Versioned, self-verifying model artifact~~
+6. ~~Versioned, self-verifying model artifact~~ (format 2: logistic regression or booster)
 7. FastAPI scoring service over that artifact: PD + reason codes per applicant
 8. PSI / drift monitoring across vintages
 

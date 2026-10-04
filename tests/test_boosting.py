@@ -208,7 +208,7 @@ def test_a_reduced_booster_round_trips_as_an_artifact(
     )
     loaded = load_artifact(directory)
     assert loaded.manifest.features == reduced.features
-    assert loaded.booster.dropped == reduced.dropped
+    assert loaded.model.dropped == reduced.dropped
     np.testing.assert_array_equal(loaded.predict_pd(later), pd_hat)
 
 

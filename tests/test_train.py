@@ -7,7 +7,9 @@ import pytest
 from conftest import make_processed
 from credit_risk.data.features import feature_names
 from credit_risk.data.split import OutOfTimeSplit, TimeWindow, out_of_time_split
-from credit_risk.models.artifact import load_artifact
+from credit_risk.models.artifact import ModelFamily, load_artifact
+from credit_risk.models.baseline import FittedBaseline
+from credit_risk.models.boosting import FittedBooster
 from credit_risk.models.calibration import Method
 from credit_risk.prepare import sha256
 from credit_risk.train import (
@@ -107,25 +109,76 @@ def test_cli_writes_a_report_comparing_models_and_feature_sets(tmp_path: Path) -
     assert "## Features left out" not in report
 
 
-def test_cli_saves_the_applicant_booster_as_a_loadable_artifact(tmp_path: Path) -> None:
-    frame = tmp_path / "loans.parquet"
+@pytest.fixture(scope="module")
+def loans_file(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    frame = tmp_path_factory.mktemp("data") / "loans.parquet"
     make_processed().to_parquet(frame, index=False)
-    artifacts = tmp_path / "artifacts"
+    return frame
+
+
+def _train(loans_file: Path, out: Path, *artifact: str) -> None:
     main(
         [
-            str(frame),
+            str(loans_file),
             *("--train", "2012-01:2014-12", "--test", "2015-07:2016-12"),
-            *("--out", str(tmp_path / "model_report.md"), "--artifact-dir", str(artifacts)),
+            *("--out", str(out / "model_report.md"), *artifact),
         ]
     )
 
+
+@pytest.mark.parametrize(
+    "artifact",
+    [
+        ("--artifact-dir", "artifacts"),
+        ("--artifact-model", "logistic-regression"),
+        ("--artifact-dir", "artifacts", "--artifact-model", "champion"),
+    ],
+)
+def test_cli_refuses_to_guess_which_model_to_save(
+    loans_file: Path, tmp_path: Path, artifact: tuple[str, ...], capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit) as exited:
+        _train(loans_file, tmp_path, *artifact)
+    assert exited.value.code == 2
+    assert "--artifact-" in capsys.readouterr().err
+    assert not (tmp_path / "model_report.md").exists()  # refused before any training
+
+
+@pytest.mark.parametrize(
+    ("family", "calibration_months", "model"),
+    [
+        (ModelFamily.LOGISTIC_REGRESSION, None, "logistic regression"),
+        (ModelFamily.GRADIENT_BOOSTING, 6, "gradient boosting + platt"),
+    ],
+)
+def test_cli_saves_the_named_applicant_model_as_a_loadable_artifact(
+    loans_file: Path,
+    tmp_path: Path,
+    family: ModelFamily,
+    calibration_months: int | None,
+    model: str,
+) -> None:
+    artifacts = tmp_path / "artifacts"
+    _train(loans_file, tmp_path, "--artifact-dir", str(artifacts), "--artifact-model", family)
+
     (saved,) = artifacts.iterdir()
-    manifest = load_artifact(saved).manifest
+    loaded = load_artifact(saved)
+    manifest = loaded.manifest
+    assert manifest.family is family
+    assert isinstance(
+        loaded.model,
+        FittedBaseline if family is ModelFamily.LOGISTIC_REGRESSION else FittedBooster,
+    )
     assert manifest.features == feature_names()
-    assert manifest.provenance.data_sha256 == sha256(frame)
+    assert manifest.provenance.data_sha256 == sha256(loans_file)
     assert manifest.provenance.train_window == ("2012-01", "2014-12")
     assert manifest.provenance.test_window == ("2015-07", "2016-12")
-    assert manifest.provenance.calibration_months == 6
+    assert manifest.provenance.calibration_months == calibration_months
+    # The saved test scores are that model's own row in the report.
+    report = (tmp_path / "model_report.md").read_text()
+    row = f"| applicant | {model} | test | "
+    auc = report.split(row)[1].split(" | ")[3]  # loans, default rate, mean PD, AUC
+    assert f"{manifest.test_scores['auc']:.4f}" == auc
 
 
 def test_report_lists_features_each_model_left_out_once(split: OutOfTimeSplit) -> None:

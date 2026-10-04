@@ -19,10 +19,14 @@ The calibrated booster is then explained on a sample of the test window:
 mean absolute TreeSHAP contribution per feature, and the reason codes behind
 the riskiest applicant-only scores.
 
-With `--artifact-dir`, the applicant-only calibrated booster is saved as a
-versioned artifact (`models/artifact.py`). Applicant-only because it is the
-one a lender can deploy: grade and interest rate are outputs of the lender's
-own pricing, set after the applicant is scored.
+With `--artifact-dir DIR --artifact-model FAMILY`, one applicant-only model is
+saved as a versioned artifact (`models/artifact.py`): the logistic regression
+fitted on the whole training window, or the calibrated booster. The family is
+always named, never inferred from which model scored better on this run's
+test window — that choice is made once, on a development window, and frozen.
+Applicant-only because it is the one a lender can deploy: grade and interest
+rate are outputs of the lender's own pricing, set after the applicant is
+scored.
 """
 
 from __future__ import annotations
@@ -44,7 +48,7 @@ from credit_risk.data.split import (
     out_of_time_split,
 )
 from credit_risk.data.target import TARGET
-from credit_risk.models.artifact import Provenance, save_artifact
+from credit_risk.models.artifact import FittedModel, ModelFamily, Provenance, save_artifact
 from credit_risk.models.baseline import FittedBaseline, fit_baseline
 from credit_risk.models.boosting import FittedBooster, fit_booster
 from credit_risk.models.calibration import Method
@@ -279,9 +283,17 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--artifact-dir",
         type=Path,
-        help="save the applicant-only calibrated booster as a versioned artifact here",
+        help="save the applicant-only model named by --artifact-model as an artifact here",
+    )
+    parser.add_argument(
+        "--artifact-model",
+        type=ModelFamily,
+        choices=list(ModelFamily),
+        help="model family to save; required with --artifact-dir",
     )
     args = parser.parse_args(argv)
+    if (args.artifact_dir is None) != (args.artifact_model is None):
+        parser.error("--artifact-dir and --artifact-model must be given together")
 
     split = out_of_time_split(pd.read_parquet(args.frame), train=args.train, test=args.test)
     results = evaluate(split, calibration_months=args.calibration_months, method=args.calibration)
@@ -296,16 +308,18 @@ def main(argv: list[str] | None = None) -> None:
     print(f"wrote {args.out}")
     if args.artifact_dir is not None:
         applicant = results[0]
+        logistic = args.artifact_model is ModelFamily.LOGISTIC_REGRESSION
+        model: FittedModel = applicant.baseline if logistic else applicant.booster
         path = save_artifact(
-            applicant.booster,
+            model,
             args.artifact_dir,
             provenance=Provenance(
                 data_sha256=sha256(args.frame),
                 train_window=_months(split.train_window),
-                calibration_months=args.calibration_months,
+                calibration_months=None if logistic else args.calibration_months,
                 test_window=_months(split.test_window),
             ),
-            test_scores=applicant.evaluations[2].test,
+            test_scores=applicant.evaluations[0 if logistic else 2].test,
             reference=applicant.explained,
         )
         print(f"wrote artifact {path}")
