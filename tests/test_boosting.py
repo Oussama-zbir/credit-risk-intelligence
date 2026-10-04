@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -5,8 +7,17 @@ import pytest
 from conftest import make_processed
 from credit_risk.data.features import feature_names
 from credit_risk.data.split import TimeWindow, hold_out_latest
-from credit_risk.data.target import ISSUE_DATE
-from credit_risk.models.boosting import MAX_TREES, FittedBooster, fit_booster
+from credit_risk.data.target import ISSUE_DATE, TARGET
+from credit_risk.models.artifact import Provenance, load_artifact, save_artifact
+from credit_risk.models.boosting import (
+    MAX_TREES,
+    FittedBooster,
+    fit_booster,
+    model_frame,
+)
+from credit_risk.models.degenerate import degenerate_features
+from credit_risk.models.explain import explain
+from credit_risk.models.metrics import score
 
 APPLICANT = feature_names()
 WITH_PRICING = feature_names(include_lender_pricing=True)
@@ -89,3 +100,121 @@ def test_categorical_levels_seen_in_fitting_are_recorded(
         "grade",
         "sub_grade",
     }
+
+
+def test_ordinary_training_fits_every_requested_feature(booster: FittedBooster) -> None:
+    assert booster.features == WITH_PRICING
+    assert booster.dropped == {}
+    assert tuple(booster.model.feature_names_in_) == WITH_PRICING
+
+
+# The real 2010-01 to 2011-06 fitting window: no `mort_acc` reported at all, and
+# only individual applications. Both appear later, in calibration and test.
+type Degenerate = tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]
+
+
+@pytest.fixture(scope="module")
+def degenerate(slices: tuple[pd.DataFrame, pd.DataFrame]) -> Degenerate:
+    fitting, calibration = (frame.copy() for frame in slices)
+    fitting["mort_acc"] = np.nan
+    fitting["application_type"] = pd.Categorical(["Individual"] * len(fitting))
+    # One observed value plus missing values: still two values, so still fitted.
+    fitting["emp_length_years"] = np.where(fitting.index % 3 == 0, np.nan, 10.0)
+    later = make_processed(2000, seed=1)
+    later["application_type"] = pd.Categorical(
+        np.where(later.index % 2 == 0, "Joint App", "Individual")
+    )
+    return fitting, calibration, later
+
+
+@pytest.fixture(scope="module")
+def reduced(degenerate: Degenerate) -> FittedBooster:
+    fitting, calibration, _ = degenerate
+    return fit_booster(fitting, calibration, WITH_PRICING)
+
+
+def test_degenerate_means_at_most_one_value_counting_missing(degenerate: Degenerate) -> None:
+    assert degenerate_features(degenerate[0], WITH_PRICING) == {
+        "mort_acc": "all missing",
+        "application_type": "constant 'Individual'",
+    }
+
+
+def test_degenerate_fitting_features_are_left_out_and_recorded(reduced: FittedBooster) -> None:
+    assert set(reduced.dropped) == {"mort_acc", "application_type"}
+    assert reduced.features == tuple(
+        name for name in WITH_PRICING if name not in {"mort_acc", "application_type"}
+    )
+    assert reduced.features == tuple(reduced.model.feature_names_in_)
+    assert "application_type" not in reduced.categories
+
+
+def test_one_observed_value_plus_missing_is_retained(reduced: FittedBooster) -> None:
+    assert "emp_length_years" in reduced.features
+
+
+def test_features_present_only_after_the_fitting_window_cannot_enter_the_model(
+    degenerate: Degenerate, reduced: FittedBooster
+) -> None:
+    later = degenerate[2]
+    assert later["mort_acc"].notna().all()
+    pd_hat = reduced.predict_pd(later)
+    assert np.isfinite(pd_hat).all()
+    # Rewriting the dropped columns changes nothing: they are not read at all.
+    rewritten = later.assign(mort_acc=99.0, application_type="Joint App")
+    np.testing.assert_array_equal(reduced.predict_pd(rewritten), pd_hat)
+    # And a scoring frame without them is complete.
+    np.testing.assert_array_equal(
+        reduced.predict_pd(later.drop(columns=["mort_acc", "application_type"])), pd_hat
+    )
+
+
+def test_a_level_first_seen_after_fitting_is_scored_as_missing(
+    slices: tuple[pd.DataFrame, pd.DataFrame], booster: FittedBooster
+) -> None:
+    loans = slices[1].head(20).copy()
+    loans["purpose"] = loans["purpose"].astype(object)
+    unseen = loans.assign(purpose="renewable_energy")
+    missing = loans.assign(purpose=None)
+    np.testing.assert_array_equal(booster.predict_pd(unseen), booster.predict_pd(missing))
+
+
+def test_explanations_cover_exactly_the_fitted_features(
+    degenerate: Degenerate, reduced: FittedBooster
+) -> None:
+    later = degenerate[2].head(300)
+    result = explain(reduced, later)
+    assert tuple(result.contributions.columns) == reduced.features
+    expected = reduced.model.decision_function(model_frame(later, reduced.features))
+    np.testing.assert_allclose(result.log_odds, expected, atol=1e-9)
+
+
+def test_a_reduced_booster_round_trips_as_an_artifact(
+    tmp_path: Path, degenerate: Degenerate, reduced: FittedBooster
+) -> None:
+    later = degenerate[2]
+    pd_hat = reduced.predict_pd(later)
+    directory = save_artifact(
+        reduced,
+        tmp_path,
+        provenance=Provenance(
+            data_sha256="ab" * 32,
+            train_window=("2010-01", "2011-12"),
+            calibration_months=6,
+            test_window=("2012-01", "2012-12"),
+        ),
+        test_scores=score(later[TARGET], pd_hat, reference_rate=0.2),
+        reference=later,
+    )
+    loaded = load_artifact(directory)
+    assert loaded.manifest.features == reduced.features
+    assert loaded.booster.dropped == reduced.dropped
+    np.testing.assert_array_equal(loaded.predict_pd(later), pd_hat)
+
+
+def test_a_window_where_nothing_varies_is_refused(
+    slices: tuple[pd.DataFrame, pd.DataFrame],
+) -> None:
+    fitting = slices[0].assign(mort_acc=np.nan)
+    with pytest.raises(ValueError, match="no requested feature varies"):
+        fit_booster(fitting, slices[1], ("mort_acc",))

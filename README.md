@@ -60,6 +60,7 @@ src/credit_risk/models/
   baseline.py     logistic regression; every preprocessing statistic fitted on train only
   boosting.py     monotone-constrained gradient boosting, early-stopped on a later slice
   calibration.py  Platt / isotonic recalibration fitted on that slice, never on test
+  degenerate.py   features with no variation in a model's fitting rows, left out of that model
   metrics.py      AUC, Gini, KS (ranking); Brier, log loss, reliability bins (probabilities)
   explain.py      exact TreeSHAP over the booster's trees; adverse-action reason codes
   artifact.py     versioned model on disk: manifest, hash and reference-PD checks on load
@@ -97,6 +98,13 @@ same split — applicant features only, and applicant features plus Lending
 Club's grade and interest rate — and `model_report.md` puts the logistic
 baseline, the raw booster and the recalibrated booster side by side, with a
 reliability table (mean PD against observed default rate, per decile) for each.
+
+A requested feature with no variation in the rows a model is fitted on —
+missing everywhere, or a single level — is left out of that model and listed
+under "Features left out" in the report. The rule is
+`nunique(dropna=False) <= 1` on the fitting rows only, so one observed value
+plus missing values is kept (missingness can carry risk) and the test window
+never decides; details in [`docs/DATA.md`](docs/DATA.md#features-with-no-variation-in-a-fitting-window).
 
 The model is deliberately plain: `log1p` on monetary amounts, median
 imputation plus a missingness indicator, standardisation, one-hot categories

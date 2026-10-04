@@ -91,7 +91,10 @@ def make_processed(loans: int = 4000, *, seed: int = 0) -> pd.DataFrame:
             "purpose": pd.Categorical(
                 rng.choice(["debt_consolidation", "credit_card", "other"], loans)
             ),
-            "application_type": pd.Categorical(["Individual"] * loans),
+            # Deterministic, so adding the second level draws nothing from `rng`.
+            "application_type": pd.Categorical(
+                np.where(np.arange(loans) % 20 == 0, "Joint App", "Individual")
+            ),
             "home_ownership": pd.Categorical(rng.choice(["RENT", "MORTGAGE", "OWN"], loans)),
             "verification_status": pd.Categorical(
                 rng.choice(["Verified", "Source Verified", "Not Verified"], loans)

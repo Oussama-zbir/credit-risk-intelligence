@@ -134,6 +134,29 @@ below zero, and a first credit line dated after the loan. A test asserts that
 every applicant and pricing column in the contract feeds some feature, so a
 column added to the contract cannot be dropped silently.
 
+### Features with no variation in a fitting window
+
+Some fields only exist in later vintages. In a 2010-2011 training window the
+real export has no `mort_acc` at all, and `application_type` is `Individual`
+for every loan. A feature like that cannot inform a fit: the booster crashes
+binning an all-missing column, and the logistic regression fits it anyway and
+reports a coefficient that looks like a risk driver.
+
+Each model therefore drops a requested feature whose values in **its own
+fitting rows** satisfy `nunique(dropna=False) <= 1`
+([`models/degenerate.py`](../src/credit_risk/models/degenerate.py)):
+
+- Only fitting rows decide: the full training window for the baseline, and the
+  training window minus its calibration months for the booster. The test
+  window never does. A feature that only varies later is not read at scoring
+  time either, so it cannot enter the model through the back door.
+- Missing counts as a value. One observed value plus missing values is two
+  values and stays, because whether a field was reported can itself predict
+  default.
+- `features` on a fitted model is the set actually fitted, and `dropped` maps
+  each left-out feature to its reason (`all missing`, `constant 'Individual'`).
+  `model_report.md` lists them under "Features left out".
+
 ## Snapshot date
 
 The maturity window needs the date the export was taken. It is read from the

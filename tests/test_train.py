@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -9,7 +10,14 @@ from credit_risk.data.split import OutOfTimeSplit, TimeWindow, out_of_time_split
 from credit_risk.models.artifact import load_artifact
 from credit_risk.models.calibration import Method
 from credit_risk.prepare import sha256
-from credit_risk.train import RISKIEST_LOANS, Comparison, evaluate, main, parse_window
+from credit_risk.train import (
+    RISKIEST_LOANS,
+    Comparison,
+    evaluate,
+    main,
+    parse_window,
+    render,
+)
 
 
 @pytest.fixture(scope="module")
@@ -96,6 +104,7 @@ def test_cli_writes_a_report_comparing_models_and_feature_sets(tmp_path: Path) -
     assert "### applicant + lender pricing\n" in report
     reasons = report.split("## Reason codes for the riskiest loans — applicant\n")[1]
     assert reasons.count("\n| ") == 2 + RISKIEST_LOANS  # header, rule, one row per loan
+    assert "## Features left out" not in report
 
 
 def test_cli_saves_the_applicant_booster_as_a_loadable_artifact(tmp_path: Path) -> None:
@@ -117,3 +126,25 @@ def test_cli_saves_the_applicant_booster_as_a_loadable_artifact(tmp_path: Path) 
     assert manifest.provenance.train_window == ("2012-01", "2014-12")
     assert manifest.provenance.test_window == ("2015-07", "2016-12")
     assert manifest.provenance.calibration_months == 6
+
+
+def test_report_lists_features_each_model_left_out_once(split: OutOfTimeSplit) -> None:
+    # `mort_acc` is missing across the whole training window, so neither model
+    # fits it. `application_type` is constant only before the calibration
+    # months, so only the booster, which never fits on those months, drops it.
+    train = split.train.copy()
+    train["mort_acc"] = np.nan
+    early = train["issue_date"] < "2014-07-01"
+    train["application_type"] = pd.Categorical(
+        np.where(early, "Individual", train["application_type"].astype(str))
+    )
+    degenerate = OutOfTimeSplit(
+        train=train, test=split.test, train_window=split.train_window, test_window=split.test_window
+    )
+    report = render(degenerate, evaluate(degenerate), calibration_months=6)
+
+    section = report.split("## Features left out\n")[1].split("\n## ")[0]
+    assert "| applicant | mort_acc | all missing | all missing |" in section
+    assert "| applicant | application_type | fitted | constant 'Individual' |" in section
+    assert section.count("| mort_acc |") == 2  # once per feature set
+    assert "mort_acc" not in report.split("## Largest baseline coefficients")[1].split("\n## ")[0]

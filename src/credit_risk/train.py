@@ -147,6 +147,31 @@ def _months(window: TimeWindow) -> tuple[str, str]:
     return f"{window.start:%Y-%m}", f"{window.end:%Y-%m}"
 
 
+def _left_out(results: list[Comparison]) -> list[str]:
+    """Requested features some model never fitted on, per feature set; nothing if none."""
+    rows = []
+    for result in results:
+        baseline, booster = result.baseline.dropped, result.booster.dropped
+        for name in dict.fromkeys([*baseline, *booster]):
+            rows.append(
+                f"| {result.features} | {name} | {baseline.get(name, 'fitted')} "
+                f"| {booster.get(name, 'fitted')} |"
+            )
+    if not rows:
+        return []
+    return [
+        "",
+        "## Features left out",
+        "",
+        "Requested features with no variation in the rows a model was fitted on "
+        "(the booster's rows exclude the calibration months). That model never reads them.",
+        "",
+        "| features | feature | logistic regression | gradient boosting |",
+        "|" + " --- |" * 4,
+        *rows,
+    ]
+
+
 def render(split: OutOfTimeSplit, results: list[Comparison], *, calibration_months: int) -> str:
     lines = [
         "# Out-of-time model comparison",
@@ -173,6 +198,7 @@ def render(split: OutOfTimeSplit, results: list[Comparison], *, calibration_mont
                     f"| {s.ks:.4f} | {s.brier:.4f} | {s.brier_skill:.2%} | {s.log_loss:.4f} "
                     f"| {s.calibration_error:.2%} |"
                 )
+    lines += _left_out(results)
     applicant = results[0]
     lines += [
         "",

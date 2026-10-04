@@ -20,6 +20,9 @@ Preprocessing choices, each deliberately simple:
 - Categories rarer than 0.5% of training loans share one "infrequent" column,
   and a category first seen in the test window lands there too rather than
   failing the scoring run.
+- Features with no variation in the training window (`models/degenerate.py`)
+  are left out before the pipeline is built: a column that is constant in
+  training still gets a coefficient, and it reads like a risk driver.
 """
 
 from __future__ import annotations
@@ -39,6 +42,7 @@ from sklearn.preprocessing import FunctionTransformer, OneHotEncoder, StandardSc
 
 from credit_risk.data.features import CATEGORICAL_FEATURES
 from credit_risk.data.target import TARGET
+from credit_risk.models.degenerate import active_features
 
 MONETARY: Final = frozenset({"loan_amnt", "annual_inc", "revol_bal", "installment"})
 MIN_CATEGORY_SHARE: Final = 0.005
@@ -100,6 +104,8 @@ class FittedBaseline:
     pipeline: Pipeline
     features: tuple[str, ...]
     train_default_rate: float
+    # Requested features left out because they were degenerate in training, and why.
+    dropped: dict[str, str]
 
     def predict_pd(self, frame: pd.DataFrame) -> npt.NDArray[np.float64]:
         proba: npt.NDArray[np.float64] = self.pipeline.predict_proba(frame[list(self.features)])
@@ -118,11 +124,13 @@ class FittedBaseline:
 
 
 def fit_baseline(train: pd.DataFrame, features: Sequence[str], *, c: float = 1.0) -> FittedBaseline:
-    """Fit on the training window only."""
-    pipeline = build_baseline(features, c=c)
-    pipeline.fit(train[list(features)], train[TARGET])
+    """Fit on the training window only, over the requested features that vary in it."""
+    active, dropped = active_features(train, features)
+    pipeline = build_baseline(active, c=c)
+    pipeline.fit(train[list(active)], train[TARGET])
     return FittedBaseline(
         pipeline=pipeline,
-        features=tuple(features),
+        features=active,
         train_default_rate=float(train[TARGET].mean()),
+        dropped=dropped,
     )

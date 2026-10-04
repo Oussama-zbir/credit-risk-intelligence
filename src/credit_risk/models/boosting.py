@@ -26,6 +26,11 @@ baseline comparison is what says whether it is needed.
 
 No class weights: reweighting defaults would inflate every PD, and the point
 of this model is PDs that can be priced on.
+
+Features degenerate in the fitting window (`models/degenerate.py`) are left
+out of every step, so one that only varies in the calibration or test window
+cannot enter the model; `FittedBooster.features` is the fitted set, and
+`dropped` records what was left out and why.
 """
 
 from __future__ import annotations
@@ -42,6 +47,7 @@ from sklearn.ensemble import HistGradientBoostingClassifier
 from credit_risk.data.features import CATEGORICAL_FEATURES
 from credit_risk.data.target import TARGET
 from credit_risk.models.calibration import Calibrator, Method, fit_calibrator
+from credit_risk.models.degenerate import active_features
 
 # +1: PD may only rise with the feature; -1: only fall.
 MONOTONE: Final[dict[str, int]] = {
@@ -96,6 +102,8 @@ class FittedBooster:
     calibrator: Calibrator
     # Levels each categorical feature took in the fitting window; any other is scored as missing.
     categories: dict[str, tuple[str, ...]]
+    # Requested features left out because they were degenerate in the fitting window, and why.
+    dropped: dict[str, str]
 
     @property
     def trees(self) -> int:
@@ -121,21 +129,26 @@ def fit_booster(
     """Fit the trees on `fitting`, then the calibrator on the later `calibration` slice.
 
     Tree growth stops once log loss on `calibration` has not improved for 20
-    rounds.
+    rounds. Features degenerate in `fitting` are left out of every step.
     """
-    model = build_booster(features, seed=seed)
+    active, dropped = active_features(fitting, features)
+    model = build_booster(active, seed=seed)
     model.fit(
-        model_frame(fitting, features),
+        model_frame(fitting, active),
         fitting[TARGET],
-        X_val=model_frame(calibration, features),
+        X_val=model_frame(calibration, active),
         y_val=calibration[TARGET],
     )
-    calibrator = fit_calibrator(_raw_pd(model, calibration, features), calibration[TARGET], method)
+    calibrator = fit_calibrator(_raw_pd(model, calibration, active), calibration[TARGET], method)
     categories = {
         name: tuple(sorted(fitting[name].dropna().astype(str).unique()))
-        for name in features
+        for name in active
         if name in CATEGORICAL_FEATURES
     }
     return FittedBooster(
-        model=model, features=tuple(features), calibrator=calibrator, categories=categories
+        model=model,
+        features=active,
+        calibrator=calibrator,
+        categories=categories,
+        dropped=dropped,
     )
