@@ -9,13 +9,14 @@ Probability-of-default modelling on public Lending Club data, built the way a
 lender would need it: a leakage-audited feature contract, an honest default
 definition, out-of-time validation, a logistic-regression baseline and
 calibrated gradient boosting measured against it, exact model reason codes and a
-versioned model artifact — and, in later milestones, serving and drift
+versioned model artifact served over HTTP — and, in a later milestone, drift
 monitoring.
 
-> **Status: model artifact.** The data contract, default definition,
+> **Status: scoring service.** The data contract, default definition,
 > out-of-time split, preprocessing pipeline, a logistic-regression baseline, a
-> calibrated gradient-boosting challenger, its explanations and a
-> self-verifying model artifact exist and are tested on synthetic rows. No
+> calibrated gradient-boosting challenger, its explanations, a self-verifying
+> model artifact and a FastAPI service over it exist and are tested on
+> synthetic rows. No
 > results over the real file are published yet, so this README quotes no
 > metrics.
 
@@ -66,6 +67,7 @@ src/credit_risk/models/
   artifact.py     versioned model (either family) on disk: manifest, hash, reference-PD checks
 src/credit_risk/prepare.py   raw export -> data/processed/loans.parquet + data_report.md
 src/credit_risk/train.py     out-of-time fit + comparison -> model_report.md
+src/credit_risk/service.py   FastAPI: PD + reason codes from one verified artifact
 ```
 
 ## Preparing the data
@@ -202,6 +204,56 @@ infrequent levels, or as no level, by the logistic regression) and reported by
 corruption, not tampering: unpickling runs code, so artifacts must come from a
 store only training writes.
 
+## Scoring service
+
+```bash
+pip install -e ".[service]"
+CREDIT_RISK_ARTIFACT_DIR=artifacts/<model_id> \
+    uvicorn --factory credit_risk.service:app_from_env
+```
+
+| endpoint | returns |
+| --- | --- |
+| `GET /health` | `ok` and the loaded `model_id` |
+| `GET /v1/model` | family, features, dropped features, provenance, out-of-time test scores |
+| `POST /v1/score` | per application: PD, up to 4 reason codes, unseen categorical levels |
+
+```bash
+curl -s localhost:8000/v1/score -H 'content-type: application/json' -d '{"applications": [{
+  "loan_amnt": 15000, "term_months": 60, "purpose": "small_business",
+  "application_type": "Individual", "annual_inc": 42000,
+  "verification_status": "Not Verified", "home_ownership": "RENT", "fico": 662,
+  "credit_history_months": 50, "delinq_2yrs": 1, "open_acc": 6, "total_acc": 12,
+  "pub_rec": 0, "revol_bal": 9000, "dti": 31.5, "revol_util": 88,
+  "inq_last_6mths": 3}]}'
+```
+
+Every response carries `model_id` and `model_family`, so any decision can be
+traced back to its manifest. Design choices:
+
+- **Verified at startup, not per request.** The artifact goes through
+  `load_artifact` (hash, scikit-learn version, reference-PD replay) in the app's
+  lifespan. If any check fails, uvicorn exits before it binds; it never serves
+  a model it cannot vouch for. A format-2 artifact, for example, stops startup
+  with `artifact format 2 is not supported`.
+- **The request is the processed applicant feature set**, the output of
+  `build_features` (`fico` as the band midpoint, `term_months` as 36 or 60,
+  `credit_history_months` at application). It covers all 20 applicant
+  features, so a model that drops one still accepts the same request. At
+  startup the model's features must be a subset of it, which refuses a model
+  trained on lender pricing: grade and rate are set after scoring, so a client
+  could not supply them. Unknown fields are a 422, so a misspelt field cannot
+  score silently as "not reported". Only the six fields the source leaves
+  empty may be null.
+- **Unseen categorical levels are scored, returned and logged, not rejected.**
+  The model has defined behaviour for them, and a new level appearing in
+  volume is drift. Scoring the real champion shows why it matters: an unseen
+  `purpose` falls into the logistic regression's infrequent bucket and becomes
+  that applicant's top adverse reason.
+- **Batches of 1–100 applications**, scored in one vectorised call. Endpoints
+  are synchronous: scoring is CPU-bound numpy, so FastAPI runs it in its
+  threadpool rather than blocking the event loop.
+
 ## Development
 
 ```bash
@@ -226,7 +278,7 @@ real file goes in `data/`, which is git-ignored.
 5. ~~Explanations and per-applicant reason codes: TreeSHAP for the booster,
    training-centred additive log-odds contributions for the logistic regression~~
 6. ~~Versioned, self-verifying model artifact~~ (format 3: logistic regression or booster)
-7. FastAPI scoring service over that artifact: PD + reason codes per applicant
+7. ~~FastAPI scoring service over that artifact: PD + reason codes per applicant~~
 8. PSI / drift monitoring across vintages
 
 ## Limitations

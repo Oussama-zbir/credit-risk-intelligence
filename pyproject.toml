@@ -30,7 +30,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+service = [
+    "fastapi>=0.142",
+    "uvicorn>=0.30",
+]
 dev = [
+    "credit-risk-intelligence[service]",
+    "httpx2>=2.13",
     "pytest>=8.2",
     "ruff>=0.6",
     "mypy>=1.11",
