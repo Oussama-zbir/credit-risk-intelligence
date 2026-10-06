@@ -12,13 +12,36 @@ calibrated gradient boosting measured against it, exact model reason codes and a
 versioned model artifact served over HTTP — and, in a later milestone, drift
 monitoring.
 
-> **Status: scoring service.** The data contract, default definition,
-> out-of-time split, preprocessing pipeline, a logistic-regression baseline, a
-> calibrated gradient-boosting challenger, its explanations, a self-verifying
-> model artifact and a FastAPI service over it exist and are tested on
-> synthetic rows. No
-> results over the real file are published yet, so this README quotes no
-> metrics.
+> **Status: scoring service, real-data results published.** The data
+> contract, default definition, out-of-time split, preprocessing pipeline, a
+> logistic-regression baseline, a calibrated gradient-boosting challenger,
+> their explanations, a self-verifying model artifact and a FastAPI service
+> over it are tested on synthetic rows and have been run on the full Lending
+> Club file: [results](#results). Drift monitoring is next.
+
+## Results
+
+776,277 matured, labelled loans (15.15% default). The champion was chosen on a
+2012 development window and frozen before 2013 was scored; applicant features
+only, as deployed:
+
+| 2013 out of time, 134,804 loans | AUC | Gini | KS | Brier | log loss | calib. error |
+| --- | --- | --- | --- | --- | --- | --- |
+| **logistic regression (champion)** | **0.6744** | **0.3489** | **0.2533** | **0.1254** | **0.4089** | 1.91% |
+| gradient boosting + Platt | 0.6717 | 0.3434 | 0.2474 | 0.1254 | 0.4090 | **1.41%** |
+
+- The regularised logistic regression beat the monotone-constrained booster
+  out of time in both windows; the booster lost 0.08 AUC from train to test,
+  the baseline 0.03.
+- Adding Lending Club's own grade and interest rate added +0.001 (2012) and
+  +0.011 (2013) AUC to the baseline: the applicant features already recover
+  most of the lender's scorecard.
+- With a stable 2013 default rate (15.6%), the champion over-predicted in
+  every decile (mean PD 17.5%): a calibration shift a default-rate chart would miss.
+
+Protocol, the 2012 development table, reproduction commands and caveats are
+in [`docs/RESULTS.md`](docs/RESULTS.md); the generated reports are in
+[`docs/results/`](docs/results/).
 
 ## Why the data layer comes first
 
@@ -90,7 +113,7 @@ the snapshot date and the rows lost at each stage.
 
 ```bash
 python -m credit_risk.train data/processed/loans.parquet \
-    --train 2012-01:2014-12 --test 2015-07:2016-03 \
+    --train 2010-01:2011-12 --test 2012-01:2012-12 \
     --calibration-months 6 --calibration platt
 ```
 
@@ -161,7 +184,7 @@ values: model reason codes for review, not a compliant adverse-action notice.
 
 ```bash
 python -m credit_risk.train data/processed/loans.parquet \
-    --train 2012-01:2014-12 --test 2015-07:2016-03 \
+    --train 2010-01:2012-12 --test 2013-01:2013-12 \
     --artifact-dir artifacts --artifact-model logistic-regression
 # or, for the calibrated booster:
 #   --artifact-dir artifacts --artifact-model gradient-boosting
@@ -269,12 +292,10 @@ real file goes in `data/`, which is git-ignored.
 ## Roadmap
 
 1. ~~Data contract, default definition, out-of-time split~~
-2. ~~Reproducible preprocessing pipeline, with a data report~~ (committed report
-   over the real file pending)
+2. ~~Reproducible preprocessing pipeline, with a data report~~
 3. ~~Logistic-regression baseline: AUC/Gini, KS, Brier on the out-of-time
-   window~~ (published results over the real file pending)
+   window~~
 4. ~~Gradient boosting against that baseline, probability calibration~~
-   (published results over the real file pending)
 5. ~~Explanations and per-applicant reason codes: TreeSHAP for the booster,
    training-centred additive log-odds contributions for the logistic regression~~
 6. ~~Versioned, self-verifying model artifact~~ (format 3: logistic regression or booster)
