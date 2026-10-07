@@ -9,15 +9,15 @@ Probability-of-default modelling on public Lending Club data, built the way a
 lender would need it: a leakage-audited feature contract, an honest default
 definition, out-of-time validation, a logistic-regression baseline and
 calibrated gradient boosting measured against it, exact model reason codes and a
-versioned model artifact served over HTTP — and, in a later milestone, drift
-monitoring.
+versioned model artifact served over HTTP, and drift monitoring against the
+model's own training window.
 
-> **Status: scoring service, real-data results published.** The data
-> contract, default definition, out-of-time split, preprocessing pipeline, a
-> logistic-regression baseline, a calibrated gradient-boosting challenger,
-> their explanations, a self-verifying model artifact and a FastAPI service
-> over it are tested on synthetic rows and have been run on the full Lending
-> Club file: [results](#results). Drift monitoring is next.
+> **Status: all planned milestones built, real-data results published.** The
+> data contract, default definition, out-of-time split, preprocessing pipeline,
+> a logistic-regression baseline, a calibrated gradient-boosting challenger,
+> their explanations, a self-verifying model artifact, a FastAPI service over
+> it and PSI drift monitoring are tested on synthetic rows and have been run
+> on the full Lending Club file: [results](#results).
 
 ## Results
 
@@ -38,6 +38,9 @@ only, as deployed:
   most of the lender's scorecard.
 - With a stable 2013 default rate (15.6%), the champion over-predicted in
   every decile (mean PD 17.5%): a calibration shift a default-rate chart would miss.
+- Drift monitoring traces that shift to its inputs: lower FICO scores account
+  for 68% of the rise in mean log-odds. The score PSI (0.067) stayed under the
+  usual 0.10 alarm while the model was 2 points off.
 
 Protocol, the 2012 development table, reproduction commands and caveats are
 in [`docs/RESULTS.md`](docs/RESULTS.md); the generated reports are in
@@ -88,9 +91,11 @@ src/credit_risk/models/
   metrics.py      AUC, Gini, KS (ranking); Brier, log loss, reliability bins (probabilities)
   explain.py      exact log-odds contributions (training-centred for LR, TreeSHAP for GBM)
   artifact.py     versioned model (either family) on disk: manifest, hash, reference-PD checks
+  drift.py        PSI on bins frozen from the reference window; missing and unseen kept apart
 src/credit_risk/prepare.py   raw export -> data/processed/loans.parquet + data_report.md
 src/credit_risk/train.py     out-of-time fit + comparison -> model_report.md
 src/credit_risk/service.py   FastAPI: PD + reason codes from one verified artifact
+src/credit_risk/monitor.py   artifact vs a later window: score/feature PSI, shift attribution
 ```
 
 ## Preparing the data
@@ -277,6 +282,37 @@ traced back to its manifest. Design choices:
   are synchronous: scoring is CPU-bound numpy, so FastAPI runs it in its
   threadpool rather than blocking the event loop.
 
+## Drift monitoring
+
+```bash
+python -m credit_risk.monitor artifacts/<model_id> data/processed/loans.parquet \
+    --window 2013-01:2013-12
+```
+
+The reference is the artifact's own training window, read from the processed
+file whose SHA-256 the manifest pins; another file is refused. `drift_report.md`
+answers three questions:
+
+- **Did the score move?** PSI of the PD on the training PD deciles, overall and
+  per quarter, beside mean PD and, when outcomes exist, the default rate.
+- **Which inputs moved?** PSI of every fitted feature. Bins are fitted on the
+  training window and frozen: deciles for numbers (fewer when values tie, like
+  term), one bin per training level for categories, and separate `missing`
+  and `unseen` bins, so a feed that stops sending a field shows up as drift
+  instead of being folded into a value bin.
+- **Which moves pushed the score?** The model's explanation is additive in
+  log-odds, so the change in a feature's mean contribution between the windows
+  is exactly its share of the change in mean log-odds. A feature can move a
+  lot and barely matter, or move a little on a large coefficient; this table
+  tells them apart.
+
+PSI needs no labels, so it is the signal available on the day of application.
+The 0.10 / 0.25 bands are a rule of thumb, not a test, and on the real champion
+the score PSI stayed "stable" while calibration slipped by 2 points
+([findings](docs/RESULTS.md#drift-2013-against-the-training-window)). The
+service already returns unseen categorical levels per request; this report
+counts them over a window.
+
 ## Development
 
 ```bash
@@ -300,7 +336,7 @@ real file goes in `data/`, which is git-ignored.
    training-centred additive log-odds contributions for the logistic regression~~
 6. ~~Versioned, self-verifying model artifact~~ (format 3: logistic regression or booster)
 7. ~~FastAPI scoring service over that artifact: PD + reason codes per applicant~~
-8. PSI / drift monitoring across vintages
+8. ~~PSI drift monitoring against the training window, with shift attribution~~
 
 ## Limitations
 

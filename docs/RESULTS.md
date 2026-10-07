@@ -79,10 +79,8 @@ file's SHA-256.
   moved (15.50% to 15.60%) yet the champion over-predicted (17.51%), in every
   decile and most in the top one (37.89% predicted, 32.29% observed). 2013
   loans looked riskier on their inputs than they turned out to be, and a
-  stable default rate would not have flagged it. These reports do not say
-  which inputs moved; the 60-month share, for one, rose from 18.5% to 25.5%,
-  and term is among the largest drivers. Measuring that per feature and on the
-  score is what the PSI milestone is for.
+  stable default rate would not have flagged it. Which inputs moved is
+  measured in [Drift: 2013 against the training window](#drift-2013-against-the-training-window).
 - **Recalibration fixes level, not ranking.** Platt scaling cuts the booster's
   calibration error from 2.76% to 1.41% in 2013 and leaves AUC unchanged, as a
   monotone transform must.
@@ -90,6 +88,54 @@ file's SHA-256.
   2010–2011 loan, so the development models leave it out; the confirmation
   models, whose training window includes 2012, use it. `application_type` is
   constant `Individual` in both windows and is left out of every model.
+
+## Drift: 2013 against the training window
+
+From [`drift_report_2013.md`](results/drift_report_2013.md): the champion
+artifact `699a62529632` against its own training window (2010-01 – 2012-12,
+86,624 loans), monitored on the 134,804 loans issued in 2013. No outcomes are
+needed for any PSI; the default rate is shown only because these loans have
+matured.
+
+| signal | value | reading |
+| --- | --- | --- |
+| score PSI (PD on training deciles) | 0.0668 | stable by the 0.10 rule of thumb, in every quarter (0.061–0.077) |
+| change in mean log-odds | +0.174 | mean PD 17.5% against 15.5% in training |
+| largest feature PSI | `mort_acc` 4.30 | missing for 47.0% of training loans, 0.0% in 2013 |
+| next | `fico` 0.152, `purpose` 0.149, `pub_rec` 0.101 | FICO at or below 672: 15.8% -> 23.4% of loans |
+| `term_months` PSI | 0.0016 | 60-month share 23.8% -> 25.5% |
+
+Each feature's share of the +0.174 log-odds shift comes from the change in its
+mean contribution (the model's exact additive explanation, so the shares sum to
+the total): **FICO +0.118 (68%)**, loan amount +0.058, `mort_acc` +0.028; purpose
+(-0.042, more `credit_card` loans) and income (-0.042) pulled the other way.
+Term added +0.016.
+
+- **The score PSI did not raise an alarm, and the model was 2 points off.** A
+  0.067 PSI is "stable", yet every decile was over-predicted. The rule of thumb
+  is about how far the population mix moved, not about whether the PDs are
+  still right; it is an early signal to pair with outcome-based calibration
+  checks, not a substitute for them.
+- **The over-prediction is mostly FICO.** 2013 brought more applicants at the
+  low end of the FICO range, and the model scored them as riskier — but the
+  default rate did not follow. If the model were correctly specified and only
+  the applicant mix had moved, its calibration would have held, so either the
+  FICO–default relationship weakened in 2013 or the model's single linear FICO
+  term overstates risk at the low end, where 2013 put more of its loans. These
+  numbers do not separate the two.
+- **The earlier term hypothesis was wrong.** `RESULTS.md` used to point to the
+  60-month share (18.5% -> 25.5%), but 18.5% was 2012 alone. Against the
+  champion's whole 2010–2012 training window (23.8%) the share barely moved,
+  and term explains 9% of the shift.
+- **The largest PSI is a data-feed change, not a population change.** Lending
+  Club did not report `mort_acc` for 2010–2011 loans or for 14% of 2012's; the
+  champion learned an imputed value plus a missing indicator for nearly half
+  its training rows and never sees a missing value in 2013. It contributes 16% of the shift. A feed change
+  like this is the kind of thing PSI catches and an outcome chart cannot.
+- **Why only 2013 is monitored.** The processed file holds matured loans only,
+  so from 2014 the 60-month loans are missing by construction (see
+  Protocol); PSI there would measure the labelling rule, not the applicants.
+  A live monitor would compute it on every application instead.
 
 ## Explanations in the reports
 
@@ -110,13 +156,17 @@ python -m credit_risk.train data/processed/loans.parquet \
     --train 2010-01:2012-12 --test 2013-01:2013-12 \
     --out data/processed/model_report_confirm_2013.md \
     --artifact-dir artifacts --artifact-model logistic-regression
+python -m credit_risk.monitor artifacts/699a62529632 data/processed/loans.parquet \
+    --window 2013-01:2013-12 --out data/processed/drift_report_2013.md
 ```
 
 Calibration defaults (6 months, Platt) apply. Regenerated at commit `e2a1f43`
 with Python 3.12.13, numpy 2.5.3, pandas 3.0.6 and scikit-learn 1.9.1, all
 three reports were byte-identical to the original runs, and `loans.parquet` had
 SHA-256 `1f9059fcc210b51a56257fef1e42d49491adebba832963abde10da3ed0d07662`.
-Source file SHA-256 is in the data report. The artifact id will match only
+The drift report was generated with the same versions; `monitor` refuses any
+other `loans.parquet` than the one in the artifact's manifest. Source file
+SHA-256 is in the data report. The artifact id will match only
 with the same library versions, since it is the hash of the pickled model.
 
 ## Limitations of these results
