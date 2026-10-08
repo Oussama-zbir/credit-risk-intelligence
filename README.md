@@ -96,6 +96,9 @@ src/credit_risk/prepare.py   raw export -> data/processed/loans.parquet + data_r
 src/credit_risk/train.py     out-of-time fit + comparison -> model_report.md
 src/credit_risk/service.py   FastAPI: PD + reason codes from one verified artifact
 src/credit_risk/monitor.py   artifact vs a later window: score/feature PSI, shift attribution
+Dockerfile                   the service; the artifact is mounted read-only at /artifact
+constraints.txt              runtime pins shared by training and the image
+scripts/container_smoke.sh   image check: serve a synthetic artifact, refuse a tampered one
 ```
 
 ## Preparing the data
@@ -281,6 +284,36 @@ traced back to its manifest. Design choices:
 - **Batches of 1–100 applications**, scored in one vectorised call. Endpoints
   are synchronous: scoring is CPU-bound numpy, so FastAPI runs it in its
   threadpool rather than blocking the event loop.
+
+### Container
+
+```bash
+docker build -t credit-risk-service .
+docker run -p 8000:8000 --read-only --tmpfs /tmp \
+    -v "$PWD/artifacts/<model_id>:/artifact:ro" credit-risk-service
+```
+
+- **The model is mounted, not baked in.** One image serves any artifact, a new
+  model is a new mount rather than a new build, and the image holds no data.
+  It runs as a non-root user with a read-only root filesystem.
+- **Training and serving share pinned versions.** An artifact refuses to load
+  under a scikit-learn other than the one that saved it, so the image installs
+  from `constraints.txt`. Train with `pip install -e . -c constraints.txt` to
+  get an artifact the image will serve; anything else stops startup with
+  `model saved with scikit-learn X, Y is installed`. The pins are the
+  champion's training versions. CI's quality job stays unpinned so upstream
+  releases are still tested.
+- **A failed check is a failed container.** uvicorn runs with `--lifespan on`,
+  so an artifact that does not verify exits the process (code 3) before it
+  binds, and an orchestrator sees a crash, not a healthy service without a
+  model.
+
+`scripts/container_smoke.sh` is the CI check. It trains a synthetic artifact
+with the pinned versions, serves it from the image (read-only filesystem and
+mount), checks `/health` and a `/v1/score` call, then serves a copy whose
+`model.pkl` no longer matches its manifest and requires the container to
+refuse to start. The image is about 900 MB, almost all numpy, scipy, pandas
+and pyarrow wheels.
 
 ## Drift monitoring
 

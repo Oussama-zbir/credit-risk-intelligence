@@ -1,0 +1,17 @@
+# Only pyproject.toml, README.md, LICENSE, constraints.txt and src/ are copied.
+# Models and data never enter the build context: the artifact is mounted.
+.git
+.github
+.venv
+venv
+**/__pycache__
+.pytest_cache
+.mypy_cache
+.ruff_cache
+artifacts
+data
+docs
+tests
+scripts
+.env
+*.env

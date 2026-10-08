@@ -1,0 +1,35 @@
+# Runtime versions for the scoring image and for training an artifact it will
+# serve. An artifact records the scikit-learn it was saved with and refuses to
+# load under any other, so training and serving must resolve to the same pins:
+#
+#     pip install -e . -c constraints.txt           # train
+#     docker build -t credit-risk-service .          # serve (installs with -c)
+#
+# These are the versions the published champion (699a62529632) was trained
+# with. CI's quality job installs unpinned, so upstream releases are still
+# tested; bumping a pin here means retraining the artifacts that are served.
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anyio==4.15.1
+click==8.5.0
+cloudpickle==3.1.2
+fastapi==0.142.2
+h11==0.16.0
+idna==3.20
+joblib==1.6.0
+narwhals==2.26.0
+numpy==2.5.3
+opentelemetry-api==1.45.0
+pandas==3.0.6
+pyarrow==25.0.1
+pydantic==2.13.5
+pydantic_core==2.46.5
+python-dateutil==2.9.0.post0
+scikit-learn==1.9.1
+scipy==1.18.1
+six==1.17.0
+starlette==1.7.0
+threadpoolctl==3.7.0
+typing-inspection==0.4.4
+typing_extensions==4.16.0
+uvicorn==0.54.0

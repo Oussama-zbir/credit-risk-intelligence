@@ -43,3 +43,26 @@ jobs:
 
       - name: Test (pytest)
         run: pytest -v
+
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The image's interpreter and pins, so the artifact trained here loads in it.
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install pinned runtime
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e . pytest -c constraints.txt
+
+      - name: Build image
+        run: docker build -t credit-risk-service .
+
+      - name: Smoke test (synthetic artifact, then a tampered one)
+        run: scripts/container_smoke.sh credit-risk-service
