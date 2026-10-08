@@ -1,4 +1,5 @@
 import json
+import stat
 from pathlib import Path
 
 import numpy as np
@@ -159,6 +160,11 @@ def test_an_artifact_is_never_overwritten(
     with pytest.raises(ArtifactError, match="never overwritten"):
         _save(fitted, saved.parent, test_window, PROVENANCE[family])
     assert [p.name for p in saved.parent.iterdir()] == [saved.name]  # no staging left behind
+
+
+def test_an_artifact_is_readable_by_other_users(saved: Path) -> None:
+    # The service runs as its own user (the image's non-root one), not the trainer.
+    assert stat.S_IMODE(saved.stat().st_mode) == 0o755
 
 
 def test_saving_without_reference_loans_is_refused(

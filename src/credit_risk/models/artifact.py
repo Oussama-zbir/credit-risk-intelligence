@@ -258,6 +258,10 @@ def save_artifact(
         (staging / MODEL).write_bytes(model_bytes)
         sample.to_parquet(staging / REFERENCE, index=False)
         (staging / MANIFEST).write_text(manifest.model_dump_json(indent=2) + "\n")
+        # mkdtemp creates 0700, which the rename would keep: the serving process
+        # usually runs as another user (the image's non-root one) and could not
+        # read the artifact. Write access stays with the training user.
+        staging.chmod(0o755)
         staging.rename(target)
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)

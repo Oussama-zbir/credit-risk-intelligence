@@ -295,7 +295,9 @@ docker run -p 8000:8000 --read-only --tmpfs /tmp \
 
 - **The model is mounted, not baked in.** One image serves any artifact, a new
   model is a new mount rather than a new build, and the image holds no data.
-  It runs as a non-root user with a read-only root filesystem.
+  It runs as a non-root user with a read-only root filesystem. Artifacts
+  saved before `save_artifact` set the directory to 0755 are 0700, which that
+  user cannot read on Linux; `chmod 755` them once.
 - **Training and serving share pinned versions.** An artifact refuses to load
   under a scikit-learn other than the one that saved it, so the image installs
   from `constraints.txt`. Train with `pip install -e . -c constraints.txt` to
