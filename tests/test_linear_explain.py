@@ -15,6 +15,12 @@ from credit_risk.models.explain import REASONS, ExplanationError, explain, reaso
 APPLICANT = feature_names()
 
 
+def _missing(value: object) -> bool:
+    # pd.isna on a scalar, through a Series: pandas-stubs has no overload for
+    # `object`, which is what a mixed-dtype frame cell is typed as.
+    return bool(pd.Series([value]).isna().iat[0])
+
+
 @pytest.fixture(scope="module")
 def split() -> OutOfTimeSplit:
     return out_of_time_split(
@@ -152,7 +158,7 @@ def test_a_categorical_is_measured_from_the_training_level_frequencies(
     typical = sum(coef[f"home_ownership_{level}"] * share for level, share in frequency.items())
     contributions = explain(baseline, loans).contributions
     for index in loans.index[5:20]:
-        level = loans.at[index, "home_ownership"]
+        level = str(loans.at[index, "home_ownership"])
         assert contributions.at[index, "home_ownership"] == pytest.approx(
             coef[f"home_ownership_{level}"] - typical, abs=1e-12
         )
@@ -196,9 +202,9 @@ def test_an_unseen_level_follows_the_encoders_infrequent_bucket(
     levels = [name for name in coef.index if name.startswith("purpose_")]
     expected = sum(coef[n] * (x.at[unseen.index[0], n] - means[n]) for n in levels)
     result = explain(model, unseen)
-    contribution = result.contributions.at[unseen.index[0], "purpose"]
+    contribution = result.contributions["purpose"].iloc[0]
     assert contribution == pytest.approx(expected, abs=1e-12)
-    assert contribution == explain(model, rare).contributions.at[rare.index[0], "purpose"]
+    assert contribution == explain(model, rare).contributions["purpose"].iloc[0]
     all_zero = -sum(coef[n] * means[n] for n in levels)
     assert contribution != pytest.approx(all_zero)  # the bucket's coefficient counts
     np.testing.assert_allclose(
@@ -247,7 +253,7 @@ def test_reasons_show_the_applicants_own_values_not_encoded_ones(
     for index, reasons in zip(loans.index, codes, strict=True):
         for reason in reasons:
             raw = loans.at[index, reason.feature]
-            assert (pd.isna(raw) and pd.isna(reason.value)) or reason.value == raw
+            assert (_missing(raw) and _missing(reason.value)) or reason.value == raw
     # A low FICO score and a high DTI are this model's adverse drivers.
     risky = [str(r) for r in codes[5]]
     assert "FICO score (620)" in risky
